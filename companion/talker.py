@@ -1988,31 +1988,39 @@ class Brain:
         """C heard A and B talk about him by name. He reacts like a real man would, and they may answer back:
         a laugh, a friendly jab, or (if they badmouthed him) a confrontation that can end in shooting.
         A may be the player (PLAYER_TALKER): nobody writes lines for him, and shooting at him = turning hostile.
+        b may be None: A said it to C's face, and it is between the two of them.
         Returns [(npc, line, emote, kills), ...], C first; kills = [target] he opens fire on (maybe the player)."""
         player = a.get("player")
-        tag = lambda n: "A" if n is a else "B" if n is b else "C"
+        tag = lambda n: "A" if n is a else "B" if b is not None and n is b else "C"
         talk = "\n".join(f"{tag(n)} ({'the player' if n.get('player') else n.get('name')}): {strip_tags(line)}"
                          for n, line in lines)
         where = place_name(c.get("place")) or LEVELS.get(state.get("level"), state.get("level"))
         rel = lambda x, y: ("same faction" if x.get("community") == y.get("community") else
                             f"{COMMUNITIES.get(x.get('community'), x.get('community'))} vs "
                             f"{COMMUNITIES.get(y.get('community'), y.get('community'))}")
-        if player:
+        if b is None:
+            parts = [f"C: {npc_brief(c)}", f"A: {npc_brief(a)}",
+                     f"Where: {where}, {weather_name(state.get('weather'))}. C and A: {rel(c, a)}.",
+                     f"A just said this to C, to his face:\n{talk}"]
+        elif player:
             who_a = ("A: the player, a stalker" + (f" known as «{PLAYER_NAME}»" if PLAYER_NAME else "")
                      + (f". What people know about him: {PLAYER_BIO}" if PLAYER_BIO else "") + ".")
             ties = f"C and B: {rel(c, b)}."
         else:
             who_a, ties = f"A: {npc_brief(a)}", f"C and A: {rel(c, a)}; C and B: {rel(c, b)}."
-        parts = [f"C: {npc_brief(c)}", who_a, f"B: {npc_brief(b)}",
-                 f"Where: {where}, {weather_name(state.get('weather'))}. {ties}",
-                 f"A and B were just talking, and C, standing nearby, heard them mention him by name:\n{talk}"]
+        if b is not None:
+            parts = [f"C: {npc_brief(c)}", who_a, f"B: {npc_brief(b)}",
+                     f"Where: {where}, {weather_name(state.get('weather'))}. {ties}",
+                     f"A and B were just talking, and C, standing nearby, heard them mention him by name:\n{talk}"]
         if remembers:
             parts.append(f"C's memory (him = the player): {remembers}")
         shoot = ("[ACTION: kill Name] (Name = the man he shoots" + (", or [ACTION: hostile] to shoot the player"
                                                                       if player else "") + ")")
         parts.append(
-            "Write what happens next, like a real simulation: C speaks first, to both of them, reacting to what "
-            "they actually said about him. Friendly or harmless talk: he jokes back, plays along, corrects them, "
+            ("Write what happens next, like a real simulation: C answers A, reacting to what A actually said. "
+             "They may go back and forth. Friendly" if b is None else
+             "Write what happens next, like a real simulation: C speaks first, to both of them, reacting to what "
+             "they actually said about him. Friendly") + " or harmless talk: he jokes back, plays along, corrects them, "
             "1-2 lines in total. Mocking, insulting, accusing him or spreading rumours: he confronts them; they "
             "may apologise, laugh it off, double down or threaten back; 2-4 lines in total. Each line 3-20 words. "
             "It may escalate to a gunfight ONLY if these men's characters really would (bandits and hotheads, "
@@ -2021,9 +2029,11 @@ class Brain:
             "line. Most of the time it ends in words. "
             "A line may end with [ACTION: emote X], X one of: " + ", ".join(EMOTES) + ". "
             + ("A is the player: never write a line for A; only C and B speak. " if player else "")
-            + f"C is {c.get('name')}, " + ("" if player else f"A is {a.get('name')}, ") + f"B is {b.get('name')}. "
-            "Nobody says his own name. Output lines like \"C: text\", "
-            + ("" if player else "\"A: text\", ") + "\"B: text\", nothing else.")
+            + f"C is {c.get('name')}" + ("" if player else f", A is {a.get('name')}")
+            + (f", B is {b.get('name')}" if b is not None else "") + ". "
+            "Nobody says his own name. Output lines like \"C: text\""
+            + ("" if player else ", \"A: text\"") + (", \"B: text\"" if b is not None else "")
+            + ", nothing else.")
         ask = "\n".join(parts)
         men = {"C": c, "A": a, "B": b}
         for attempt in range(2):
@@ -2035,7 +2045,7 @@ class Brain:
                 if not m or not m.group(2).strip():
                     continue
                 npc = men[m.group(1)]
-                if npc.get("player"):
+                if npc is None or npc.get("player"):
                     continue  # the player's words are his own
                 said, action, extras = split_action(m.group(2))
                 line = drop_own_name(self.vary_tags(re.sub(r"[*\"«»]", "", said).strip()), npc)
@@ -2047,7 +2057,7 @@ class Brain:
                 kills = []
                 if not npc.get("story") and not npc.get("wounded") and npc.get("community") != "ecolog":
                     for kind, arg in extras:
-                        target = next((x for x in (a, b, c) if x is not npc and not x.get("player")
+                        target = next((x for x in (a, b, c) if x is not None and x is not npc and not x.get("player")
                                        and mentions(x, arg)), None) if kind == "kill" else None
                         if target and not target.get("story"):
                             kills.append(target)
@@ -3503,7 +3513,7 @@ class Talker:
             return None
         if not third:
             return None
-        a, b = talkers
+        a, b = (tuple(talkers) + (None,))[:2]
         scene = []
 
         def write():
@@ -3524,9 +3534,10 @@ class Talker:
         writer.join(30)
         if not scene or self.recording:
             return
-        log(f"  {third.get('name')} heard his name:")
+        log(f"  {third.get('name')} " + ("heard his name:" if b is not None else "answers:"))
         name = lambda n: "you" if n.get("player") else n.get("name")
-        notes = [f"(to {name(a)} and {name(b)})" if npc is third else f"(to {third.get('name')})"
+        notes = [(f"(to {name(a)} and {name(b)})" if b is not None else f"(to {name(a)})") if npc is third
+                 else f"(to {third.get('name')})"
                  for npc, *_ in scene]
         self.speak_lines([(npc, line) for npc, line, *_ in scene], state, notes=notes,
                          gestures=[emote for _, _, emote, _ in scene])
@@ -3671,7 +3682,12 @@ class Talker:
                 log(f"Twitch ({user}) via {npc.get('name')}: {line}")
                 # Whoever answers him is written NOW, while his line plays, and speaks the moment it ends.
                 started, follow, heard = threading.Event(), None, []
-                if named:  # the stalker he talked about answers him
+                # The viewer named nobody, but the line says it to a man standing nearby ("Юрасю, ти..."): he
+                # answers, and it may grow into a quarrel or a fight.
+                face = None if named or to_everyone(text) else self.start_overheard([(npc, line)], (npc,), state)
+                if face:
+                    heard.append(face)
+                elif named:  # the stalker he talked about answers him
                     # and anyone else they name who stands nearby hears it and may react to them both
                     follow = self.answer_after(
                         started, named, state, "addressed", extra={"name": npc.get("name"), "line": strip_tags(line)},

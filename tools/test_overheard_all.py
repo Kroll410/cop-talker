@@ -36,7 +36,7 @@ class FakeBrain:
                 "Гонта": "Вовк? Та він учора знову в аномалію вліз."}.get(npc["name"], "Ага.")
 
     def overheard(self, c, a, b, lines, state, remembers=""):
-        self.got = (c["name"], a.get("player") or a["name"], b["name"], [l for _, l in lines])
+        self.got = (c["name"], a.get("player") or a["name"], b and b["name"], [l for _, l in lines])
         time.sleep(0.3)
         return [(c, "Я тут сиджу, бо плачу, на відміну від деяких.", None, [])]
 
@@ -96,6 +96,18 @@ t.finish_overheard((vovk, talker.PLAYER_TALKER, gonta, [(vovk, "Ну все, т�
                     done), st2)
 ok &= check(("act", 6, "hostile") in sent, "a quarrel with the player can turn the man hostile")
 
+# Twitch: the viewer names nobody ("start arguing with bandit"), the retold line speaks to Юрась: he answers
+said.clear()
+zhorka = {"id": 7, "name": "Жорка Адвокат", "community": "stalker", "rank": 300, "x": 1, "z": 1, "dist": 3,
+          "place": "zat_b55"}
+st3 = {"npcs": [zhorka, baton, boroda], "level": "zaton", "hours": 22, "weather": "clear"}
+t = fresh()
+t.brain.reply = lambda npc, *a, **k: "Юрасю, сидиш тут з таким ебалом, ніби в тебе тушонку вкрали, чмо болотне!"
+t._twitch_line(zhorka, st3, ("kroll", "start arguing with bandit", None, "character"), None)
+order = [n for n, _ in said]
+ok &= check(order == ["Жорка Адвокат", "Юрась Батон"], f"Twitch, said to his face: {order}")
+ok &= check(t.brain.got[:3] == ("Юрась Батон", "Жорка Адвокат", None), "one-on-one: no third talker")
+
 if "--live" in sys.argv:
     talker.LLM_PROVIDER = "claude"
     brain = talker.Brain()
@@ -118,5 +130,16 @@ if "--live" in sys.argv:
             print(f"  {n['name']}: {l}" + (f"  [{e}]" if e else "") + (f"  => KILL {k[0].get('name') or 'PLAYER'}"
                                                                          if k else ""))
         ok &= check(bool(scene) and all(not n.get("player") for n, *_ in scene), "no lines written for the player")
+
+    print("Live, said to his face (the Юрась case from the log), 4 runs:")
+    face = [(zhorka, "Юрасю, ти, блядь, як педагог тобі кажу, сидиш тут з таким ебалом, ніби в тебе тушонку "
+                     "вкрали, а це, між іншим, в мене пузо вже третій день співає, чмо ти болотне!")]
+    for _ in range(4):
+        scene = brain.overheard(baton, zhorka, None, face, st3)
+        for n, l, e, k in scene:
+            print(f"  {n['name']}: {l}" + (f"  [{e}]" if e else "") + (f"  => KILL {k[0].get('name')}" if k else ""))
+        print("  --")
+        ok &= check(bool(scene) and scene[0][0] is baton and all(n in (baton, zhorka) for n, *_ in scene),
+                    "Юрась answers first, only the two of them speak")
 
 print("OK" if ok else "FAIL")
