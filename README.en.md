@@ -74,9 +74,10 @@ After changing them, click **Save and restart**.
 In chat:
 - `$text`: the NPC says it word for word;
 - `%text`: the NPC retells it his own way;
+- `%%`: let go of your NPC (your next message is said by another one);
 - talking to everyone ("гайз", plural "ви"): several NPCs answer.
 
-A viewer gets linked to an NPC within `TWITCH_DISTANCE`. If that NPC dies or is far away, the viewer moves to another one.
+A viewer gets linked to a free NPC within `TWITCH_DISTANCE`. If that NPC dies, the link goes; the viewer gets a new one with his next message. Nobody's NPC is taken from them.
 
 ## Keys
 

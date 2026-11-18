@@ -21,6 +21,7 @@ class FakeGame:
 t = talker.Talker.__new__(talker.Talker)
 t.twitch_queue, t.busy, t.recording = [], threading.Lock(), False
 t.twitch_links, t.twitch_names, t.next_link_sync, t.next_twitch_note = {}, {}, 0.0, 0.0
+t.left_npc = {}
 t.game = FakeGame()
 spoke = []
 t._twitch_line = lambda npc, state, item, named=None: spoke.append((item[0], npc and npc["name"], named and named["name"]))

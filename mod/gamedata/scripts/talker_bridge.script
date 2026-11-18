@@ -5,7 +5,7 @@
 --   inbox.txt    - written by the companion: "say|<npc_id>|<text>" lines; read and deleted here
 -- Every entry point is called through pcall from the hooks, so a bug here never crashes the game.
 
-MOD_VERSION = 12  -- the companion app checks this, so a game still running an old copy of this script is noticed
+MOD_VERSION = 13  -- the companion app checks this, so a game still running an old copy of this script is noticed
 local dir = nil
 local next_state_write = 0
 local next_inbox_check = 0
@@ -168,6 +168,14 @@ local EMOTES = { hello = "hello", salute = "salut", threat = "threat", punch = "
 local LONG_EMOTES = { sit = 20000, guitar = 20000, harmonica = 20000 }
 local emotes = {}
 
+local looks = {}  -- looks[npc id] = { target = id, till = ms }: who he faces while he talks
+
+local function look_target(npc)
+	local l = looks[npc:id()]
+	local obj = l and level.object_by_id(l.target)
+	return (obj and obj:alive()) and obj or db.actor
+end
+
 local function play_emote(npc, name)
 	local state = EMOTES[name]
 	if not state then return false, "unknown gesture" end
@@ -176,7 +184,7 @@ local function play_emote(npc, name)
 	if okw and wounded then return false, "he is wounded" end
 	local id = npc:id()
 	local prev = emotes[id] and emotes[id].prev or state_mgr.get_state(npc)
-	state_mgr.set_state(npc, state, nil, nil, { look_object = db.actor }, { fast_set = true })
+	state_mgr.set_state(npc, state, nil, nil, { look_object = look_target(npc) }, { fast_set = true })
 	emotes[id] = { till = time_global() + (LONG_EMOTES[name] or 4500), prev = prev, state = state }
 	return true
 end
@@ -191,7 +199,45 @@ local function update_emotes()
 			emotes[id] = nil
 			pcall(state_mgr.set_state, npc, e.prev or "idle", nil, nil, nil, { fast_set = true })
 		elseif state_mgr.get_state(npc) ~= e.state then  -- his logic took over too early: keep it going
-			pcall(state_mgr.set_state, npc, e.state, nil, nil, { look_object = db.actor })
+			pcall(state_mgr.set_state, npc, e.state, nil, nil, { look_object = look_target(npc) })
+		end
+	end
+end
+
+-- "look:<id>:<seconds>": while he talks to another man (or listens to him), he turns to face him, in whatever
+-- pose he is in; then his own logic takes over again. Never during a fight.
+local function look_at(npc, arg)
+	local target_id, seconds = string.match(arg or "", "^(%d+):?(%d*)$")
+	local target = target_id and level.object_by_id(tonumber(target_id))
+	if not target or not target:alive() or target:id() == npc:id() then return false, "nobody to look at" end
+	if npc:best_enemy() then return false, "he is fighting" end
+	local okw, wounded = pcall(function() return xr_wounded.is_wounded(npc) end)
+	if okw and wounded then return false, "he is wounded" end
+	local ms = math.max(2, math.min(30, tonumber(seconds) or 6)) * 1000
+	looks[npc:id()] = { target = target:id(), till = time_global() + ms }
+	if not emotes[npc:id()] then  -- a gesture going on keeps its pose and just turns to him
+		state_mgr.set_state(npc, state_mgr.get_state(npc), nil, nil, { look_object = target })
+	end
+	return true
+end
+
+local function update_looks()
+	local now = time_global()
+	for id, l in pairs(looks) do
+		local npc = level.object_by_id(id)
+		local target = level.object_by_id(l.target)
+		if not npc or not npc:alive() or npc:best_enemy() then
+			looks[id] = nil
+		elseif now > l.till or not target or not target:alive() then
+			looks[id] = nil
+			if not emotes[id] then  -- let his own logic choose where to look again
+				pcall(state_mgr.set_state, npc, state_mgr.get_state(npc), nil, nil, nil)
+			end
+		elseif not emotes[id] then  -- his logic turned him away: face the man again
+			local st = db.storage[id] and db.storage[id].state_mgr
+			if st and st.look_object ~= l.target then
+				pcall(state_mgr.set_state, npc, state_mgr.get_state(npc), nil, nil, { look_object = target })
+			end
 		end
 	end
 end
@@ -494,6 +540,11 @@ local function do_action(npc_id, action)
 		return
 	end
 	if kind == "mouth" then return talk_mouth(npc, arg) end
+	if kind == "look" then
+		local ok, err = pcall(look_at, npc, arg)
+		if not ok then log_error("look: " .. tostring(err)) end
+		return
+	end
 	if kind == "paidby" then  -- another NPC pays him for the job (money moves between them, never yours)
 		local from_id, amount = string.match(arg, "^(%d+):(%d+)$")
 		local payer = from_id and level.object_by_id(tonumber(from_id))
@@ -1063,6 +1114,10 @@ function update(delta)
 		if not ok then log_error("link label: " .. tostring(err)); link_shown = nil end
 	end
 	if next(contracts) or next(grudges) then pcall(update_contracts) end
+	if next(looks) then
+		local okl, errl = pcall(update_looks)
+		if not okl then log_error("looks: " .. tostring(errl)) end
+	end
 	if next(emotes) then
 		local ok, err = pcall(update_emotes)
 		if not ok then log_error("emotes: " .. tostring(err)) end

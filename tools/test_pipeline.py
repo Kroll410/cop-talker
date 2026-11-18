@@ -14,7 +14,7 @@ voice_lock = threading.Lock()   # the voice player: one line at a time
 t0 = time.time()
 
 
-def fake_speak(npc, line, state=None, pda_text=None, note=None, aside=False, on_start=None):
+def fake_speak(npc, line, state=None, pda_text=None, note=None, aside=False, on_start=None, look_at=None):
     time.sleep(FETCH)                       # the voice is fetched (can overlap another line playing)
     with voice_lock:                        # ...then waits its turn to play
         log.append((round(time.time() - t0, 1), "starts", npc["name"]))

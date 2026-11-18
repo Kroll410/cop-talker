@@ -336,7 +336,8 @@ FUN_RULE = FUN_RULES.get(FUN_LEVEL, FUN_RULES["high"])
 # prompt that writes spoken lines (they all include FUN_RULE), and fix_factions() repairs anything that slips through.
 FUN_RULE += ("\n- The Duty faction is called only Долг (Долгу, Долгом), its men only долгівець / долгівці (долгівця, "
              "долгівців, долгівцям). Never \"Обов'язок\" or \"обов'язківці\" for them."
-             "\n- Only Ukrainian letters: never ы, э, ъ, ё, even in a Russian word. Never talk about yourself by "
+             "\n- Only Ukrainian letters (never ы, э, ъ, ё), except for a bandit: he talks surzhyk, and his Russian "
+             "words are written in Russian. Never talk about yourself by "
              "your own name, as if about someone else.")
 SYSTEM_PROMPT = SYSTEM_PROMPT.format(tags=AUDIO_TAGS_RULE if EXPRESSIVE else "", fun=FUN_RULE)
 MONOLITH_PROMPT = MONOLITH_PROMPT.format(tags=MONOLITH_TAGS_RULE if EXPRESSIVE else "")
@@ -363,15 +364,27 @@ def slur_level(npc):
     return "common" if community in SLUR_COMMON else "rare"
 
 
+SLUR_ANSWER = (" If someone throws a slur at you or a friend (\"жид\", \"підар\"...), you react like a real man: "
+               "take offence, snap back, threaten, or brush it off with contempt.")
+
+
 def slur_note(npc):
     level = slur_level(npc)
     if level == "common":
-        return (" Street slurs like «підар», «негр», «чмо» are part of your everyday vocabulary: you throw them at "
-                "people as insults all the time, like the game's bandits. Never preach hate about whole groups.")
+        return (" Street slurs like «підар», «негр», «жид», «чмо» are part of your everyday vocabulary: you throw them "
+                "at people as insults all the time, like the game's bandits («жид» at anyone stingy, greedy or "
+                "haggling over money). Never preach hate about whole groups.")
     if level == "rare":
-        return (" Street slurs like «підар» are not your usual talk: only very rarely, when you are really angry "
-                "or mocking someone. Never preach hate about whole groups.")
+        return (" Street slurs like «підар» or «жид» are not your usual talk: only very rarely, when you are really "
+                "angry or mocking someone. Never preach hate about whole groups." + SLUR_ANSWER)
+    if not is_monolith(npc or {}):
+        return SLUR_ANSWER
     return ""
+
+
+BANDIT_SPEECH = (" Speech: surzhyk, about half Russian and half Ukrainian, mixed inside sentences like a street thug "
+                 "(\"слышь\", \"чё\", \"братан\", \"базар\", \"короче\" next to Ukrainian words); his Russian words "
+                 "are written in Russian.")
 
 
 # The nickname stalkers know the player by (empty: they don't know his name)
@@ -425,6 +438,15 @@ def named_bystander(lines, bystanders, talkers=()):
             if n.get("id") not in ids and mentions(n, strip_tags(line)):
                 return n
     return None
+
+
+def talked_to(lines, i, first=None):
+    """Whom line i of a talk is said to: the last other man who spoke, else the next one, else `first`."""
+    me = lines[i][0]
+    for npc, _ in list(reversed(lines[:i])) + list(lines[i + 1:]):
+        if npc is not me and npc.get("id") != me.get("id"):
+            return npc
+    return first
 
 
 def event_subject(ev):
@@ -506,7 +528,8 @@ def npc_brief(n):
     rel = {"enemy": " Hostile to the player.", "friend": " The player's friend."}.get(n.get("relation"), "")
     return (f"{n.get('name')}, {COMMUNITIES.get(n.get('community'), n.get('community'))}, "
             f"{rank_name(n.get('rank'))}.{rel} {voice.get('character', '')} Speech: {voice.get('speech', '')} "
-            f"Swearing: {faction.get('swearing', 'moderate')}.{slur_note(n)}{quirk}")
+            f"Swearing: {faction.get('swearing', 'moderate')}."
+            f"{BANDIT_SPEECH if n.get('community') == 'bandit' else ''}{slur_note(n)}{quirk}")
 
 
 # Stems of slurs against real groups. A line with one is regenerated unless this man may say it.
@@ -1752,7 +1775,8 @@ class Brain:
                 character += f" Today it shows that you are: {'; '.join(npc_quirks(npc))}."
             parts.append(character)
         parts.append(f"Speech: {voice.get('speech', 'plain')} {faction.get('attitude', '')} "
-                     f"Swearing: {faction.get('swearing', 'moderate')}.{slur_note(npc)}")
+                     f"Swearing: {faction.get('swearing', 'moderate')}."
+                     f"{BANDIT_SPEECH if npc.get('community') == 'bandit' else ''}{slur_note(npc)}")
 
         # Where and when (not needed for a shout)
         if mode != "hostile":
@@ -2716,6 +2740,7 @@ class Talker:
         self.twitch_links = {}   # viewer nickname (lower case) -> id of the NPC who speaks for him
         self.twitch_names = {}   # lower case -> nickname as shown
         self.load_links()        # kept in twitch_links.json across restarts
+        self.left_npc = {}       # viewer -> the NPC he just left with "%%"
         self.next_link_sync = 0.0
         if TWITCH_ENABLED:
             from twitch import Twitch
@@ -2738,7 +2763,8 @@ class Talker:
     # ------------------------------------------------------------ one line right after another
     # The voice player plays one line at a time, in order. A follow-up line is written and its voice fetched while
     # the line before it is still playing, so it starts the moment that one ends (no pause for the AI and TTS).
-    def answer_after(self, after, npc, state, mode, extra=None, player_text="", note=None, on_written=None):
+    def answer_after(self, after, npc, state, mode, extra=None, player_text="", note=None, on_written=None,
+                     to=None):
         """Write `npc`'s reply now, in the background; speak it once the line before it (`after`) has started
         playing. on_written(line) runs as soon as it is written. Returns the thread (join it before the
         conversation is over)."""
@@ -2757,17 +2783,19 @@ class Talker:
                 if self.recording:  # the player started talking: let him
                     return
                 log(f"  {npc.get('name')} answers: {line}")
-                self.speak(npc, line, state, note=note, on_start=lambda: self.gesture(npc, emote))
+                self.speak(npc, line, state, note=note, on_start=lambda: self.gesture(npc, emote), look_at=to)
             except Exception as exc:
                 log(f"answer error: {exc!r}")
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
         return thread
 
-    def speak_lines(self, lines, state, notes=None, gestures=None):
+    def speak_lines(self, lines, state, notes=None, gestures=None, look_first=None):
         """Several lines in order (a chat, a confrontation): each line's voice is fetched while the one before it
-        plays. Stops early if the player starts talking."""
+        plays. Stops early if the player starts talking. Each speaker faces the man he answers (the last other
+        speaker; for the first line, the next one, or look_first)."""
         prev, threads = None, []
+        listeners = [talked_to(lines, i, look_first) for i in range(len(lines))]
         for i, (npc, line) in enumerate(lines):
             started = threading.Event()
 
@@ -2779,7 +2807,7 @@ class Talker:
                         return
                     log(f"  {npc.get('name')}: {line}")
                     emote = gestures[i] if gestures and i < len(gestures) else None
-                    self.speak(npc, line, state, note=notes[i] if notes else None,
+                    self.speak(npc, line, state, note=notes[i] if notes else None, look_at=listeners[i],
                                on_start=lambda: (self.gesture(npc, emote), started.set()))
                 finally:
                     started.set()  # never leave the next line waiting
@@ -2800,11 +2828,14 @@ class Talker:
         """The gesture the AI put in the line it just wrote for this NPC, if any."""
         self.gesture(npc, next((arg for kind, arg in self.brain.last_extras if kind == "emote"), None))
 
-    def speak(self, npc, line, state=None, pda_text=None, note=None, aside=False, on_start=None):
+    def speak(self, npc, line, state=None, pda_text=None, note=None, aside=False, on_start=None, look_at=None):
         """Voice + subtitle of one line, the subtitle appearing right as the voice starts.
         note: also keep the line in his memory, e.g. "(to Лоцман)" (talks with the player are kept elsewhere).
-        aside: a quieter mutter that may play over someone else's line. on_start() runs when the voice starts."""
-        line, pda_text = (ukrainian_letters(fix_factions(t)) for t in (line, pda_text))
+        aside: a quieter mutter that may play over someone else's line. on_start() runs when the voice starts.
+        look_at: the NPC he says it to: they turn to face each other while he talks (game script v13+)."""
+        # a bandit's surzhyk keeps its Russian words; everyone else's stray Russian letters become Ukrainian
+        fix = fix_factions if npc.get("community") == "bandit" else (lambda t: ukrainian_letters(fix_factions(t)))
+        line, pda_text = fix(line), fix(pda_text)
         plain = strip_tags(line)
         self.spoken.append((time.time(), plain))
         try:  # a news story he just told won't be offered again (unless it's big news)
@@ -2828,6 +2859,11 @@ class Talker:
             # his mouth moves in the game for about as long as the voice talks (Ukrainian at this speed ~13 chars/s)
             seconds = len(plain) / (13.0 * TTS_SPEED / 0.85)
             self.game.send("act", npc["id"], f"mouth:{seconds:.1f}")
+            if look_at and look_at.get("id") is not None and not look_at.get("player") \
+                    and look_at.get("id") != npc.get("id"):
+                hold = int(seconds) + 3
+                self.game.send("act", npc["id"], f"look:{look_at['id']}:{hold}")
+                self.game.send("act", look_at["id"], f"look:{npc['id']}:{hold}")
             if on_start:
                 on_start()
 
@@ -2860,7 +2896,7 @@ class Talker:
             elif what == "ptt_up":
                 self.ptt_up.set()
 
-    MOD_VERSION = 12  # must match MOD_VERSION in talker_bridge.script
+    MOD_VERSION = 13  # must match MOD_VERSION in talker_bridge.script
 
     def check_mod_version(self, state):
         """The game reads its scripts only when a save loads: warn if it still runs an older copy."""
@@ -2894,6 +2930,17 @@ class Talker:
                     what = "You just finished the job the player paid you for: your target is dead. Tell him briefly."
                     threading.Thread(target=self._ambient_line, args=(killer, state, "react", {"what": what}),
                                      daemon=True).start()
+
+    def unlink_dead(self, events):
+        """A viewer's NPC died: that's it, the link and its label go. The viewer gets a man again only when he
+        writes his next message, like a new viewer."""
+        dead = {(ev.get("victim") or {}).get("id") for ev in events if ev.get("type") == "death"}
+        for key, npc_id in list(self.twitch_links.items()):
+            if npc_id in dead:
+                del self.twitch_links[key]
+                self.save_links()
+                self.game.send("link", npc_id, "")
+                log(f"Twitch: {self.twitch_names.get(key, key)}'s NPC died: unlinked")
 
     def remember_events(self, events):
         """Witnessed events go into each nearby NPC's long-term memory (TALKER-style)."""
@@ -3173,7 +3220,7 @@ class Talker:
             return None
         other = others[0]
         extra = {"name": npc.get("name"), "player": player_text, "line": line}
-        return self.answer_after(after, other, state, "chime", extra=extra,
+        return self.answer_after(after, other, state, "chime", extra=extra, to=npc,
                                  note=f"(butting in on the player and {npc.get('name')})")
 
     def squad_backup(self, leader, state, line, action):
@@ -3539,8 +3586,9 @@ class Talker:
         notes = [(f"(to {name(a)} and {name(b)})" if b is not None else f"(to {name(a)})") if npc is third
                  else f"(to {third.get('name')})"
                  for npc, *_ in scene]
+        said_it = next((n for n in (b, a) if n is not None and not n.get("player")), None)
         self.speak_lines([(npc, line) for npc, line, *_ in scene], state, notes=notes,
-                         gestures=[emote for _, _, emote, _ in scene])
+                         gestures=[emote for _, _, emote, _ in scene], look_first=said_it)
         if self.recording:
             return
         for npc, _, _, kills in scene:
@@ -3558,6 +3606,11 @@ class Talker:
     # ------------------------------------------------------------ Twitch: viewers speak through NPCs
     def on_twitch(self, user, text, redemption):
         text = text.strip()
+        if text == "%%":  # "unlink me": his NPC is let go; his next message gets another man
+            self.unlink_viewer(user)
+            if redemption is not None and self.twitch:
+                self.twitch.finish(redemption, spoken=False)
+            return
         if text[:1] in ("$", "%"):  # the first sign picks how the NPC says it
             mode, text = ("verbatim" if text[0] == "$" else "character"), text[1:].strip()
         else:  # no $ or %: TWITCH_UNPREFIXED decides (ignored by default)
@@ -3602,13 +3655,30 @@ class Talker:
         else:
             # Someone else says the message, so the named stalker isn't talking about himself; he answers after.
             taken = set(self.twitch_links.values())
-            free = [n for n in others if n.get("id") not in taken] or others
-            npc = random.choice(free) if free else None
-            if npc and not linked:  # his man is gone (left, dead, wounded): link him to this one
+            free = [n for n in others if n.get("id") not in taken]
+            left = self.left_npc.pop(user.lower(), None)  # after "%%": a different man, if there is one
+            free = [n for n in free if n.get("id") != left] or free
+            if free:  # new viewer, or his man is gone (left, dead, wounded): link him to a free one
+                npc = random.choice(free)
                 self.link_viewer(user, npc)
+            else:  # every man around already speaks for a viewer: borrow one for this message, take nobody's man
+                npc = random.choice(others) if others else None
         threading.Thread(target=self._twitch_line, args=(npc, state, item, named[0] if named else None),
                          daemon=True).start()
         return True
+
+    def unlink_viewer(self, user):
+        """The viewer asked to be let go from his NPC ("%%"): the label goes, and his next message is said by
+        another man (not the one he just left, if anyone else is free)."""
+        key = user.lower()
+        old = self.twitch_links.pop(key, None)
+        if old is None:
+            log(f"Twitch: {user} asked to unlink, but has no NPC")
+            return
+        self.left_npc[key] = old
+        self.save_links()
+        self.game.send("link", old, "")
+        log(f"Twitch: {user} unlinked from his NPC; the next message gets another one")
 
     def link_viewer(self, user, npc):
         """From now on this viewer's messages go through this NPC; looking at him in game shows [nickname]."""
@@ -3691,8 +3761,8 @@ class Talker:
                     # and anyone else they name who stands nearby hears it and may react to them both
                     follow = self.answer_after(
                         started, named, state, "addressed", extra={"name": npc.get("name"), "line": strip_tags(line)},
-                        note=f"(to {npc.get('name')})", on_written=lambda answer: heard.append(self.start_overheard(
-                            [(npc, line), (named, answer)], (npc, named), state)))
+                        note=f"(to {npc.get('name')})", to=npc, on_written=lambda answer: heard.append(
+                            self.start_overheard([(npc, line), (named, answer)], (npc, named), state)))
                 elif to_everyone(text) or "?" in text or tells_joke(text):
                     # "$Пацани...", "$Гайз, ви чули...?": the others answer; a joke: they react to it
                     follow = threading.Thread(target=self.group_answer, daemon=True, args=(
@@ -3703,7 +3773,8 @@ class Talker:
                 self.gesture(npc, emote)
                 # PDA: under the NPC's name and portrait, "[nickname] what he says"
                 self.speak(npc, line, state, pda_text=f"[{user}] {strip_tags(line)}" if TWITCH_SHOW_NAME else None,
-                           note=f"(voicing Twitch viewer {user})", on_start=started.set)
+                           note=f"(voicing Twitch viewer {user})", on_start=started.set,
+                           look_at=named or (face[0] if face else None))
                 started.set()
                 if follow:
                     follow.join(90)
@@ -3761,6 +3832,7 @@ class Talker:
                 break
             log(f"  {npc.get('name')}: {line}")
             self.speak(npc, line, state, note=None if from_player else f"(to everyone, after {speaker})",
+                       look_at=speaker_npc,
                        on_start=answer_started.set)
             answer_started.set()
             if from_player:
@@ -3887,6 +3959,8 @@ class Talker:
                 if events:
                     self.remember_events(events)
                     self.on_game_results(events, self.game.state())
+                    if self.twitch_links:
+                        self.unlink_dead(events)
                     for ev in events:
                         if ev.get("type") == "order":
                             self.on_order(ev)

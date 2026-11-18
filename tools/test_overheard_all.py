@@ -56,7 +56,7 @@ def fresh():
     t.do_deals = lambda *a: None
     t.squad_backup = lambda *a: None
     t.speak = lambda npc, line, *a, **k: (k.get("on_start") or (lambda: None))() or said.append((npc["name"], line))
-    t.speak_lines = lambda ls, st, notes=None, gestures=None: said.extend((n["name"], l) for n, l in ls)
+    t.speak_lines = lambda ls, st, notes=None, gestures=None, look_first=None: said.extend((n["name"], l) for n, l in ls)
     return t
 
 

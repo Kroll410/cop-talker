@@ -55,7 +55,7 @@ t.game = type("G", (), {"send": lambda self, *a: None})()
 brain.group = lambda *a, **k: [(men[1], "Відповідь.", [], False), (men[0], "Бурмоче.", [], True)]
 
 
-def fake_speak(npc, line, state=None, pda_text=None, note=None, aside=False, on_start=None):
+def fake_speak(npc, line, state=None, pda_text=None, note=None, aside=False, on_start=None, look_at=None):
     events.append(("start", npc["name"], aside, round(time.time(), 2)))
     if on_start:
         on_start()
