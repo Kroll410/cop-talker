@@ -103,6 +103,35 @@ PERSONAL_TOPICS = [
     "his phone, the internet, a video or meme he saw", "a show, film, game or song he likes",
     "sports or a match he followed", "prices and life in Ukraine now", "a famous person or a scandal",
 ]
+# Zone talk that fits the games' lore (rumours, never stated as certain fact).
+ZONE_TOPICS = [
+    "a rumour about Стрілець (Мічений) and where he is now", "what really waits at the ЧАЕС: the Wish Granter legend",
+    "why «Моноліт» fighters are the way they are", "an artifact he once found or almost found",
+    "an anomaly that nearly killed him", "a mutant he met face to face", "how he sat out his worst emission",
+    "a friend the Zone took", "«Долг» against «Воля»: who is right", "a stash he dreams of finding",
+    "the army helicopters that went down this year", "what the scientists on Янів are really up to",
+    "Сидорович, Бармен or another Zone legend he has heard stories about", "a bandit who robbed him, or he robbed",
+    "a stalker superstition he believes in", "what the Zone is: punishment, an experiment, or alive",
+]
+# Absurd, dumb or philosophical things men say when bored.
+ABSURD_TOPICS = [
+    "a weird dream he had last night", "a dumb conspiracy theory about the Zone he half believes",
+    "a pointless argument: could a controller control a cat, would a snork make a good pet, and so on",
+    "a crazy business idea for when he gets out", "what mutants do on their day off",
+    "which mutant he'd be and why", "a deep thought about life that comes out stupid",
+    "if he found the Wish Granter, the dumbest wish he'd make", "a strange habit of his he thinks is normal",
+    "an invention he swears would make him rich",
+]
+# Crude talk among grown men: bodily functions, hangovers, sex life. Rude and funny, never graphic.
+CRUDE_TOPICS = [
+    "what the canned food did to his guts today, honestly told", "how he took a dump today and what went wrong",
+    "a fart in the bunker and who got blamed", "how long since he washed, and the smell",
+    "his hangover after yesterday's vodka", "how long it's been without a woman, and how it's going",
+    "a crude question to the man next to him about women or sex",
+    "an embarrassing story with a girl back home", "what he'd do first with a woman when he gets out (no details)",
+    "a rash, an itch or some body trouble he has in the Zone", "pissing near an anomaly and what happened",
+]
+TOPIC_WEIGHTS = {"personal": 30, "zone": 25, "news": 15, "absurd": 15, "crude": 15}
 # "Я бачив, як ти...", "Це ти зробив?", "Зізнавайся": he is accused of something, or asked if he did it.
 ACCUSE_WORDS = re.compile(r"бачив,? як ти|бачив тебе|бачили,? як ти|я бачив що ти|це (ж )?ти(\s+\w+){0,2}?\s+\w+(в|ла|ли)\b|"
                           r"це був ти|ти (\w+ )?(вкрав|вбив|убив|спер|стирив|поцупив|забрав|зробив|здав|кинув|продав|"
@@ -210,6 +239,7 @@ Sound like a real man, never like an assistant:
 - You talk like a Ukrainian guy of today: current slang, memes and internet humour mixed with Zone slang, the way it comes naturally to your age and character, never forced and never the same pet phrase twice in a row. Vary your words and forms of address; don't fall back on the same few.
 - You keep up with the world beyond the Zone the way anyone with a phone does: Ukrainian news and politics, the war, prices, tech, games, films, music, sports, famous people, scandals and memes of recent years. Bring it up when it fits (comparisons, jokes, complaints, opinions), and talk about it freely when asked. You are a person who lives in the Zone, not a character in a game.
 - You have a whole life outside the Zone too: family, an ex, kids or none, parents, friends, a hometown, an old job, debts, health, hobbies, plans for after. It comes up like with any man, not only Zone business.
+- No topic is off limits among you men: Zone legends, dumb or absurd stuff, your guts and the latrine, hangovers, women and sex. Asked about any of it, answer in character, bluntly and with humour, never prudish or preachy; crude is fine, graphic sex descriptions are not.
 - Headlines you are given are real and recent: retell one in your own words and say what you think, but don't add details. Without a headline, talk about the world in general terms or things everyone knows; never make up specific recent events, matches, scores or dates. The war, deaths and tragedies are never a joke: no laughing, no [laughs], no punchline next to them; talk about them seriously, bitterly or angrily. News talk still follows the length rules: one or two sentences.
 - When he says he saw you do something, or asks if you did it, don't just deny it by reflex. Like a real man and depending on what it is and who you are: own up casually, brag about it, justify it, play it down, dodge or change the subject, lie (well or badly), blame someone else, or deny it if it really isn't like you. Play along with what he claims as if it may have happened, unless it is clearly impossible.
 - Length follows the moment. Greeting, thanks, yes/no, small talk, fighting: a few words and nothing else. A real question: 1-3 sentences, concrete. Shock: short and emotional. Never over 50 words.
@@ -281,25 +311,29 @@ def is_cyrillic(text):
     return not text or cyr >= lat
 
 
-# Opt-in (GAME_SLURS=1): bandits use the street slurs the original game's bandits use, as in-character insults.
-GAME_SLURS = os.environ.get("GAME_SLURS", "0") == "1"
-# Who uses them when GAME_SLURS=1: "all" = every faction except the Monolith (it keeps its solemn style),
-# or a comma list like "bandit,killer".
-GAME_SLURS_WHO = os.environ.get("GAME_SLURS_WHO", "all").lower()
-SLUR_FACTIONS = None if GAME_SLURS_WHO == "all" else {f.strip() for f in GAME_SLURS_WHO.split(",") if f.strip()}
+# Street slurs, like the original game's bandits use them: common for bandits, rare for everyone else,
+# never for the Monolith (solemn) or the scientists.
+SLUR_COMMON = {"bandit"}
+SLUR_NEVER = {"monolith", "ecolog", "zombied"}
+SLUR_RARE_CHANCE = 0.15  # share of an ordinary stalker's lines where a slur may stay in
 
 
-def slur_allowed(npc):
-    if not GAME_SLURS or is_monolith(npc):
-        return False
-    return SLUR_FACTIONS is None or npc.get("community") in SLUR_FACTIONS
+def slur_level(npc):
+    community = (npc or {}).get("community")
+    if is_monolith(npc or {}) or community in SLUR_NEVER:
+        return "never"
+    return "common" if community in SLUR_COMMON else "rare"
 
 
 def slur_note(npc):
-    if not slur_allowed(npc):
-        return ""
-    return (" Street slurs like «підар», «негр», «чмо» are part of your vocabulary: use them now and then as "
-            "insults at the man in front of you, like a real rough Zone stalker. Never preach hate about whole groups.")
+    level = slur_level(npc)
+    if level == "common":
+        return (" Street slurs like «підар», «негр», «чмо» are part of your everyday vocabulary: you throw them at "
+                "people as insults all the time, like the game's bandits. Never preach hate about whole groups.")
+    if level == "rare":
+        return (" Street slurs like «підар» are not your usual talk: only very rarely, when you are really angry "
+                "or mocking someone. Never preach hate about whole groups.")
+    return ""
 
 
 def mentions(npc, text):
@@ -355,14 +389,21 @@ def npc_brief(n):
             f"Swearing: {faction.get('swearing', 'moderate')}.{slur_note(n)}{quirk}")
 
 
-# Stems of slurs against real groups. Used only when GAME_SLURS is off: such a line is regenerated.
+# Stems of slurs against real groups. A line with one is regenerated unless this man may say it.
 SLUR_STEMS = re.compile(r"(?<![^\W\d_])(жид|негр|нігер|ніґер|хач|чурк|підар|підор|пидор|пидар|педик|гомік|гомик|даун)", re.I)
 
 
 def has_slur(text, npc=None):
-    if GAME_SLURS and (npc is None or slur_allowed(npc)):
+    """True if the line has a slur this man shouldn't say now: bandits may always, ordinary stalkers in about
+    one line of seven, the Monolith and scientists never."""
+    if not SLUR_STEMS.search(text or ""):
         return False
-    return bool(SLUR_STEMS.search(text or ""))
+    level = slur_level(npc)
+    if level == "common":
+        return False
+    if level == "rare":
+        return random.random() >= SLUR_RARE_CHANCE
+    return True
 
 
 # Accepting his price. Only whole words, and only in a short answer: "Згода.", "Добре, по руках", "Тримай".
@@ -586,7 +627,7 @@ MODE_TASKS = {
 CHAT_SYSTEM = """You write tiny overheard conversations between two men in the Zone (S.T.A.L.K.E.R.: Call of Pripyat), in Ukrainian. They talk to each other, not to the player.
 - 2 to 4 lines, each 3-15 words, alternating, starting with "A:" or "B:". Nothing else.
 - Real men talking: fillers, today's slang and memes, a bit of surzhyk, swearing if their faction swears; no slurs about ethnicity, nationality, religion, sexuality or disability, unless a man's description explicitly allows street slurs. Never like an assistant.
-- Topics: anything real men would talk about: Zone life, rumours, money, home, their past, a dumb idea, a complaint, something that just happened, or news, events, scandals, films, games, sports and memes from the world outside in recent years. Pick one, go somewhere specific with it, end on a punchline or naturally.
+- Topics: absolutely anything real men would talk about: Zone life and its legends, rumours, money, home, their past, a dumb idea, an absurd argument, a complaint, their guts, the latrine, hangovers, women and sex (crude, never graphic), something that just happened, or news, events, scandals, films, games, sports and memes from the world outside in recent years. Pick one, go somewhere specific with it, end on a punchline or naturally.
 {fun}
 - Each man keeps his own character and way of speaking. Use only places and people given to you, plus Затон, Юпітер, Прип'ять, Скадовськ, Борода.
 - No stage directions, no quotes, no emoji, no words from other languages (only the English voice tags).{tags}"""
@@ -873,6 +914,7 @@ def game_running():
 
 from usage import Usage  # noqa: E402  (companion/usage.py)
 from news import DEFAULT_FEEDS, News  # noqa: E402  (companion/news.py)
+from lore import lore_for  # noqa: E402  (companion/lore.py)
 
 USAGE = Usage(ROOT / "usage.json")
 
@@ -1135,11 +1177,28 @@ class Brain:
         log(f"NPC replies by {LLM_PROVIDER} ({GEMINI_MODEL if LLM_PROVIDER == 'gemini' else CLAUDE_MODEL})")
 
     def outside_topic(self):
-        """Something from outside the Zone on his mind: his own life, or a real recent headline."""
-        headline = self.news.topic() if random.random() < 0.4 else None
-        if headline:
-            return (f"You read this on your phone lately: «{headline}». Bring it up your own way: retell it "
-                    "briefly and say what you think, or joke if it's not a sad thing.")
+        """Something on his mind for idle talk: his own life, Zone lore, real news, something absurd or something
+        crude. Anything a bored man in a bar might come out with."""
+        kinds = list(TOPIC_WEIGHTS)
+        kind = random.choices(kinds, weights=[TOPIC_WEIGHTS[k] for k in kinds])[0]
+        if kind == "news":
+            headline = self.news.topic()
+            if headline:
+                return (f"You read this on your phone lately: «{headline}». Bring it up your own way: retell it "
+                        "briefly and say what you think, or joke if it's not a sad thing.")
+            kind = "personal"  # nothing fresh in the news
+        if kind == "zone":
+            topic = random.choice(ZONE_TOPICS)
+            lore = lore_for(topic)
+            return (f"On your mind: {topic}. Talk about it like a stalker who has heard the stories: keep to what "
+                    "the Zone's legends say, as rumour; add a detail of your own experience." + (f" {lore}" if lore else ""))
+        if kind == "absurd":
+            return (f"On your mind: {random.choice(ABSURD_TOPICS)}. Say it completely seriously, which makes it "
+                    "funnier; a concrete, specific detail.")
+        if kind == "crude":
+            return (f"On your mind: {random.choice(CRUDE_TOPICS)}. Talk about it bluntly and rudely the way men do "
+                    "among themselves, funny and specific, with swearing if it suits you. Crude jokes and questions "
+                    "are fine; no graphic sex descriptions.")
         return (f"On your mind: {random.choice(PERSONAL_TOPICS)}. Bring it up your own way, with a concrete "
                 "detail of your own life.")
 
@@ -1183,7 +1242,7 @@ class Brain:
             text = re.sub(r"\S*thought\S*\s*", "", text, flags=re.I).strip()  # leaked "thought" header
             text = re.sub(r"^[А-ЯІЇЄҐа-яіїєґ](?:\s+(?=[А-ЯІЇЄҐ])|(?=\[))", "", text)  # and the stray letter before it
             text = self.vary_tags(text)
-            slurred = has_slur(text, npc)  # GAME_SLURS off (or not a bandit): ask again rather than say it
+            slurred = has_slur(text, npc)  # a slur he should not say now: ask again rather than say it
             if slurred:
                 continue
             # Never offer or boast about goods he doesn't carry (and an item tag for one is the same lie).
@@ -1476,6 +1535,11 @@ class Brain:
             if news:
                 parts.append("Headlines you saw on your phone lately (real, recent): " + " | ".join(news)
                              + ". If he asks what's new, pick ONE you'd care about and tell it your way, briefly.")
+        if mode in ("reply", "addressed", "twitch", "chime"):  # famous Zone people named: what the games say
+            lore = lore_for(player_text, (extra or {}).get("line"), (extra or {}).get("text"),
+                            (extra or {}).get("player"))
+            if lore:
+                parts.append(lore)
         if mode in ("reply", "addressed") and ACCUSE_WORDS.search(player_text or (extra or {}).get("line", "")):
             parts.append("He claims you did something, or asks if you did. This time: " + accused_stance(npc) + ".")
         if mode == "greet" and not is_monolith(npc) and not state.get("emission") \
@@ -1593,21 +1657,29 @@ class Brain:
         parts.append(f"A is {a.get('name')}, B is {b.get('name')}. Nobody says his own name; he may call the other one "
                      "by name.")
         parts.append(f"{scene}\nWrite their exchange." if scene else "Write their exchange.")
-        text = self.ask_gemini("\n".join(parts), CHAT_SYSTEM) if LLM_PROVIDER == "gemini" else \
-            self.ask_claude("\n".join(parts), CHAT_SYSTEM)
-        lines, self.chat_emotes = [], []
-        for raw in (text or "").splitlines():
-            m = re.match(r"\s*\**\s*([AB])\s*\**\s*[:：-]\s*(.+)", raw)
-            if m and m.group(2).strip():
-                said, _, extras = split_action(m.group(2))  # "[ACTION: emote hello]" comes off the words
-                line = re.sub(r"[*\"«»]", "", said).strip()
-                if not strip_tags(line).strip():
-                    continue
-                line = self.vary_tags(line)
-                speaker = a if m.group(1) == "A" else b
-                line = drop_own_name(line, speaker)
-                lines.append((speaker, line))
-                self.chat_emotes.append(next((arg for kind, arg in extras if kind == "emote"), None))
+        ask = "\n".join(parts)
+        for attempt in range(2):
+            text = self.ask_gemini(ask, CHAT_SYSTEM) if LLM_PROVIDER == "gemini" else self.ask_claude(ask, CHAT_SYSTEM)
+            lines, self.chat_emotes, slurred = [], [], False
+            for raw in (text or "").splitlines():
+                m = re.match(r"\s*\**\s*([AB])\s*\**\s*[:：-]\s*(.+)", raw)
+                if m and m.group(2).strip():
+                    said, _, extras = split_action(m.group(2))  # "[ACTION: emote hello]" comes off the words
+                    line = re.sub(r"[*\"«»]", "", said).strip()
+                    if not strip_tags(line).strip():
+                        continue
+                    line = self.vary_tags(line)
+                    speaker = a if m.group(1) == "A" else b
+                    line = drop_own_name(line, speaker)
+                    if has_slur(line, speaker):  # common for bandits, rare for others, like in replies
+                        slurred = True
+                        continue
+                    lines.append((speaker, line))
+                    self.chat_emotes.append(next((arg for kind, arg in extras if kind == "emote"), None))
+            if not slurred or attempt:
+                break
+            ask += ("\n\nThe last try used slurs that don't fit these men. Write it again "
+                    "without any; ordinary swearing is fine.")
         self.chat_emotes = self.chat_emotes[:4]
         return lines[:4]
 
@@ -1632,6 +1704,9 @@ class Brain:
                      + (f" ({', '.join(places)})" if places else "")
                      + ", plus Затон, Юпітер, Прип'ять, ЧАЕС, Велика Земля; Борода runs the Скадовськ bar and trades. "
                        "Unsure? Say it vaguely, never invent a name.")
+        lore = lore_for(said)
+        if lore:
+            parts.append(lore)
         parts.append(f"{speaker} says to all of them: «{said}»")
         lead = self.group_lead(men) if GROUP_STYLE == "lead" else None
         if lead is not None:
@@ -1667,6 +1742,7 @@ class Brain:
                     continue  # the man who answers doesn't also mutter under his own answer
                 line, action, extras = split_action(m.group(3))
                 line = self.vary_tags(re.sub(r"[*\"«»]", "", line).strip())
+                line = drop_own_name(line, npc)
                 if aside:  # said under his breath: one short sentence
                     line = (re.match(r"[^.!?…]*[.!?…]+", line) or re.match(r".*", line)).group(0).strip()
                 if has_slur(line, npc) or not line:
