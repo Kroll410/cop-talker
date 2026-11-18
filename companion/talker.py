@@ -694,6 +694,29 @@ EMOTE_HINTS = [
 ]
 
 
+# Someone asks the NPC to make a gesture: "помахай рукою", "віддай честь", "сядь", "заграй на гітарі".
+GESTURE_ASKS = [
+    ("hello", r"помахай|помаши|махни|махай|привітайся рукою|зроби ручкою"),
+    ("salute", r"віддай честь|козирни|честь віддай|відсалютуй|салютуй"),
+    ("sit", r"сядь|сідай|присядь|посидь|сядьте"),
+    ("hands_up", r"підніми руки|руки вгору|руки догори|здавайся"),
+    ("threat", r"погрози|покажи кулак|пригрози кулаком|налякай"),
+    ("fold_arms", r"схрести руки|склади руки"),
+    ("backoff", r"відійди|відступи|відійди назад|відсунься"),
+    ("guitar", r"заграй на гітарі|зіграй на гітарі|заграй щось|зіграй щось|бренькни"),
+    ("harmonica", r"заграй на гармошці|зіграй на гармошці|губну гармошку"),
+    ("binocular", r"(глянь|подивись|подивися) (в|у) бінокль|візьми бінокль"),
+]
+
+
+def gesture_asked(text):
+    """The gesture someone asks for in these words, or None."""
+    for emote, words in GESTURE_ASKS:
+        if re.search(r"(?<!\w)(?:" + words + r")", text or "", re.I):
+            return emote
+    return None
+
+
 def hint_emote(text):
     """A gesture that fits a line said word for word, or None (most lines get none)."""
     for emote, words in EMOTE_HINTS:
@@ -838,10 +861,13 @@ def drop_own_name(line, npc):
     if len(first) < 3:
         return line
     stem = re.escape(first[:max(3, len(first) - 2)])  # Жорка: Жорко, Жоро, Жорику
-    fixed = re.sub(r"^(\[[^\]]*\]\s*)?" + stem + r"\w{0,3},\s*", lambda m: m.group(1) or "", line, flags=re.I)
-    if fixed != line:
-        fixed = re.sub(r"^(\[[^\]]*\]\s*)?(\w)", lambda m: (m.group(1) or "") + m.group(2).upper(), fixed, count=1)
-    return fixed or line
+    name = stem + r"\w{0,3}"
+    # "Кастете, ти..." at the start of a sentence (also after "..." or a voice tag): drop it, capitalise what follows
+    fixed = re.sub(r"(^|[.!?…]\s+)(\[[^\]]*\]\s*)?" + name + r",\s*(\w)",
+                   lambda m: m.group(1) + (m.group(2) or "") + m.group(3).upper(), line, flags=re.I)
+    # "...ти хоч моргни, Кастете!" in the middle or at the end: drop ", Кастете"
+    fixed = re.sub(r",\s*" + name + r"(?=\s*[,.!?…]|\s*$)", "", fixed, flags=re.I)
+    return fixed.strip() or line
 
 
 def too_similar(text, recent, threshold=0.6):
@@ -1223,7 +1249,12 @@ class Brain:
                                          or self.DEAL_WORDS.search(player_text or ""))
             text = self.ask_gemini(ask, system, smart) if LLM_PROVIDER == "gemini" else self.ask_claude(ask, system)
             text, self.last_action, self.last_extras = split_action(text or "")
-            text = drop_narration(text, npc)
+            text = drop_own_name(drop_narration(text, npc), npc)
+            # asked to wave, salute, sit...: he does it even if the model forgot the tag (not enemies, not the dying)
+            asked = gesture_asked(player_text or (extra or {}).get("line", "")) if mode in ("reply", "addressed") else None
+            if asked and npc.get("relation") != "enemy" and not npc.get("wounded") and not is_monolith(npc) \
+                    and not any(k == "emote" for k, _ in self.last_extras):
+                self.last_extras.append(("emote", asked))
             if npc.get("story") or mode != "reply":
                 self.last_action = None
             if self.last_action == "hostile" and not self.really_offended(npc, player_text, history):
@@ -1542,6 +1573,10 @@ class Brain:
                 parts.append(lore)
         if mode in ("reply", "addressed") and ACCUSE_WORDS.search(player_text or (extra or {}).get("line", "")):
             parts.append("He claims you did something, or asks if you did. This time: " + accused_stance(npc) + ".")
+        asked = gesture_asked(player_text or (extra or {}).get("line", "")) if mode in ("reply", "addressed") else None
+        if asked and npc.get("relation") != "enemy" and not npc.get("wounded") and not is_monolith(npc):
+            parts.append(f"He asks you to make a gesture ({asked}). You do it, grumbling or joking if you like: add "
+                         f"[ACTION: emote {asked}] on a new line. Your words go with the gesture, not instead of it.")
         if mode == "greet" and not is_monolith(npc) and not state.get("emission") \
                 and random.random() < OUTSIDE_TALK:
             parts.append(self.outside_topic())
