@@ -166,6 +166,12 @@ def accused_stance(npc):
     return STANCES[random.choices(list(weights), weights=list(weights.values()))[0]]
 
 
+# The player asks to be paid back for his help: "ти мені винен", "заплати за аптечку", "з тебе магарич"
+PAY_ASK = re.compile(r"ти мені винен|винен мені|з тебе (магарич|винагорода|належить|бутилка|пляшка)|"
+                     r"заплати (мені )?(за|теж)|віддячи|відплати|верни (мені )?(борг|аптечку|за)|"
+                     r"(де|а де) (моя )?(винагорода|плата|нагорода)|(дай|давай) (мені )?(грошей|бабки|купони|"
+                     r"винагороду)|а гроші|розплатись|розрахуйся|компенсуй|за аптечку|за допомогу|я ж тебе (врятував|"
+                     r"витягнув|прикрив|виручив)|я тобі (допоміг|життя врятував)", re.I)
 NEWS_ASK = re.compile(r"новин|що нового|що чув|чув щось|шо чув|що там (у|в) |що в світі|у світі|в україні|в києві|"
                       r"політик|вибор|президент|війн|фронт|футбол|матч|чемпіонат|кіно|фільм|серіал|музик|"
                       r"що пишуть|що кажуть|тікток|ютуб|інтернет", re.I)
@@ -251,8 +257,10 @@ Sound like a real man, never like an assistant:
 {fun}
 - Names: use only places and people given to you, plus Затон, Юпітер, Прип'ять, Янов, ЧАЕС, Велика Земля; Борода runs the Скадовськ bar. Unsure? Say it vaguely.
 - No stage directions, sounds written as words, quotes, emoji, or words from other languages (except the English voice tags). Never say you are an AI or a game character. If the player's words make no sense, react like a confused stalker.
-- You don't know the player's name unless he told you, your memory has it, or his nickname is given; never make one up. He is NOT Стрілець, Мічений or any other Zone legend: never call him by a legend's name.
+- You don't know the player's name unless he told you, your memory has it, or his nickname is given; never make one up. He is NOT Стрілець, Мічений or any other Zone legend: never call him by a legend's name. A name he says while talking to you is yours or another man's, not his.
+- Your own name is the one after "You:". Asked your name, say it plainly (stalkers go by nicknames, there's nothing to hide); asked HIS name, give his nickname if you know it, otherwise say you don't know.
 - Things everyone around already knows (an emission, the weather, the night) are not news: don't bring them up again and again.
+- Never make up deaths, fights or events: you know only what's under "Just happened", in your memory or in your own surroundings. After an emission don't invent who died out there unless you were told.
 - Manners follow who you are and how he treats you. Asked politely, or offered work, money, help or a drink, a friend or neutral stalker answers decently, even warmly; his swearing is just how he talks, not insults at the player. Insult the player only if he was rude, threatened you, did you wrong, or you are a bandit, an enemy or a man in a foul mood for a reason. Interested offers get interest, not abuse.{tags}"""
 
 # ElevenLabs v3 performs these instead of reading them; the model may use them in its lines.
@@ -340,7 +348,10 @@ def slur_note(npc):
 
 # The nickname stalkers know the player by (empty: they don't know his name)
 PLAYER_NAME = os.environ.get("PLAYER_NAME", "").strip()
+# Who the player is: his backstory (quenta), known to the stalkers and shaping how they treat him
+PLAYER_BIO = os.environ.get("PLAYER_BIO", "").strip()
 EVENT_RADIUS = float(os.environ.get("EVENT_RADIUS", "50"))  # metres: what an NPC could have seen or heard
+RUMOUR_DELAY = float(os.environ.get("RUMOUR_DELAY", "600"))  # seconds before word of an unseen event reaches him
 
 
 def knows(npc, who):
@@ -351,6 +362,10 @@ def knows(npc, who):
         return False
     if npc.get("id") is not None and npc.get("id") == who.get("id"):
         return True
+    # Inside a base (Скадовськ, Янів) or hiding from an emission: he sees nothing outside his own place
+    indoors = npc.get("sheltered") or place_name(npc.get("place")) in SAFE_PLACES
+    if indoors and (not who.get("place") or who.get("place") != npc.get("place")):
+        return False
     if None not in (npc.get("x"), npc.get("z"), who.get("x"), who.get("z")):
         return math.hypot(npc["x"] - who["x"], npc["z"] - who["z"]) <= EVENT_RADIUS
     if npc.get("place") and npc.get("place") == who.get("place"):
@@ -929,6 +944,9 @@ def drop_own_name(line, npc):
     # "Кастете, ти..." at the start of a sentence (also after "..." or a voice tag): drop it, capitalise what follows
     fixed = re.sub(r"(^|[.!?…]\s+)(\[[^\]]*\]\s*)?" + name + r",\s*(\w)",
                    lambda m: m.group(1) + (m.group(2) or "") + m.group(3).upper(), line, flags=re.I)
+    # "Ну Дима, та це ж батон": a little opening word, then the name: keep the word, drop the name
+    fixed = re.sub(r"(^|[.!?…]\s+)(\[[^\]]*\]\s*)?(ну|ой|ох|ех|ай|та|ага|слухай|чуєш|ну шо|ну що|ех ти)\s+" + name
+                   + r"(?=\s*[,.!?…])", lambda m: m.group(1) + (m.group(2) or "") + m.group(3), fixed, flags=re.I)
     # "...ти хоч моргни, Кастете!" in the middle or at the end: drop ", Кастете"
     fixed = re.sub(r",\s*" + name + r"(?=\s*[,.!?…]|\s*$)", "", fixed, flags=re.I)
     return fixed.strip() or line
@@ -945,6 +963,33 @@ def drop_legend_address(text):
     # ", Стрілець," between commas, or ", Стрільцю!" at the end
     text = re.sub(r",\s*" + LEGEND_CALL + r"(?=\s*[,.!?…]|\s*$)", "", text, flags=re.I)
     return text.strip()
+
+
+# "Як тебе звати?", "Як твоє ім'я?", "Ти хто такий?": the NPC is asked his own name
+ASKS_HIS_NAME = re.compile(r"як тебе (звати|звуть|кличуть|називають|звать|зовуть)|як твоє ім'я|твоє ім'я|"
+                           r"ти хто такий|хто ти такий|як до тебе звертатися|твоє прізвисько|як твоє погоняло", re.I)
+
+
+# "Як мене звуть?", "Хто я?", "Знаєш, як мене кличуть?": the player asks his own name
+ASKS_OWN_NAME = re.compile(r"хто я\b|хто я такий|як мене (звати|звуть|кличуть|називають|звать|зовуть)|моє ім'я|"
+                           r"мо[єе] прізвисько|моє погоняло|знаєш мене|мене знаєш|як звуть гравця|ім'я гравця", re.I)
+
+
+def thin_player_name(text, keep=0.35):
+    """The model loves opening every line with the player's name ("Бродяго, ..."): keep that only in about
+    one line of three."""
+    if not PLAYER_NAME or random.random() < keep:
+        return text
+    stem = PLAYER_NAME.split(" ")[0]
+    stem = re.escape(stem[:max(3, len(stem) - 2)])
+    # only the name that opens the line ("Бродяго, ...", "Ех... Бродяго, ..."), never one in the middle
+    m = re.match(r"^((?:\[[^\]]*\]\s*)?(?:(?:ну|ой|ох|ех|ай|та|ага|слухай|чуєш)[.…,!]*\s+)?)" + stem
+                 + r"\w{0,3}\s*[,.…!]+\s*(\w?)", text, re.I)
+    if not m:
+        return text
+    head, first = m.group(1), m.group(2)
+    rest = text[m.end():]
+    return (head + first.upper() + rest).strip() or text
 
 
 def too_similar(text, recent, threshold=0.6):
@@ -1132,18 +1177,21 @@ class Game:
         nobody is given."""
         lines = []
         for ts, ev in self.recent_events[-8:]:
-            if listeners and not any(knows(n, event_subject(ev)) for n in listeners if n):
-                continue  # happened somewhere they couldn't see or hear
             ago = int(time.time() - ts)
+            rumour = ""
+            if listeners and not any(knows(n, event_subject(ev)) for n in listeners if n):
+                if ago < RUMOUR_DELAY:
+                    continue  # happened somewhere they couldn't see; word hasn't reached them yet
+                rumour = "(not seen, word got around later) "
             kind = ev.get("type")
             if kind == "death":
                 victim = ev.get("victim") or {}
                 killer = ev.get("killer") or {}
                 who = "гравець" if ev.get("by_actor") else killer.get("name", "щось")
-                lines.append(f"{ago}s ago: {victim.get('name')} ({COMMUNITIES.get(victim.get('community'), victim.get('community'))}) was killed by {who}")
+                lines.append(f"{rumour}{ago}s ago: {victim.get('name')} ({COMMUNITIES.get(victim.get('community'), victim.get('community'))}) was killed by {who}")
             elif kind == "actor_hit_npc":
                 npc = ev.get("npc") or {}
-                lines.append(f"{ago}s ago: the player shot {npc.get('name')}")
+                lines.append(f"{rumour}{ago}s ago: the player shot {npc.get('name')}")
         return "\n".join(lines) or "nothing notable"
 
 
@@ -1187,6 +1235,9 @@ class Memory:
             parts.append("You saw: " + "; ".join(d["seen"][-4:]) + ".")
         if d.get("said"):  # his own recent words to others, so he stays consistent with himself
             parts.append("Your own recent words: " + " | ".join(d["said"][-4:]) + ".")
+        if d.get("owes"):  # unpaid help: he can ask for it, and you know it
+            parts.append("You owe him for: " + "; ".join(f"{o['why']} (fair reward about {o['worth']} coupons)"
+                                                         for o in d["owes"]) + ".")
         return " ".join(parts)
 
     def said(self, npc_key, line, note=""):
@@ -1195,6 +1246,28 @@ class Memory:
             said = self.diary(npc_key).setdefault("said", [])
             said.append(f"{note} {line}".strip())
             del said[:-8]
+            self.save()
+
+    # What he owes the player for help (a medkit when dying, a hand in a fight). Paid debts are settled.
+    def owe(self, npc_key, why, worth):
+        with self.lock:
+            debts = self.diary(npc_key).setdefault("owes", [])
+            if any(d["why"] == why and time.time() - d["at"] < 300 for d in debts):
+                return  # the same help counted once
+            debts.append({"why": why, "worth": worth, "at": time.time()})
+            del debts[:-5]
+            self.save()
+
+    def owed(self, npc_key):
+        return list((self.data.get("__diary__", {}).get(npc_key) or {}).get("owes", []))
+
+    def settle(self, npc_key, paid):
+        """He paid the player `paid`: debts are settled, oldest first."""
+        with self.lock:
+            debts = self.diary(npc_key).setdefault("owes", [])
+            while debts and paid > 0:
+                paid -= debts[0]["worth"]
+                debts.pop(0)
             self.save()
 
     def witness(self, npc_key, what):
@@ -1331,6 +1404,7 @@ class Brain:
             text = self.ask_gemini(ask, system, smart) if LLM_PROVIDER == "gemini" else self.ask_claude(ask, system)
             text, self.last_action, self.last_extras = split_action(text or "")
             text = drop_legend_address(drop_own_name(drop_narration(text, npc), npc))
+            text = thin_player_name(text)
             # asked to wave, salute, sit...: he does it even if the model forgot the tag (not enemies, not the dying)
             asked = gesture_asked(player_text or (extra or {}).get("line", "")) if mode in ("reply", "addressed") else None
             if asked and npc.get("relation") != "enemy" and not npc.get("wounded") and not is_monolith(npc) \
@@ -1574,12 +1648,9 @@ class Brain:
         # The player as you see him
         rel = {"enemy": "an enemy", "friend": "a friend"}.get(npc.get("relation"), "a stranger")
         player = f"Player ({rel}, {npc.get('dist', 0):.0f} m away"
-        # his nickname only now and then (given every time, the model starts every line with it), and always when
-        # he asks who he is
-        asks_name = re.search(r"хто я|як мене звати|моє ім'я|мене знаєш|знаєш мене|як мене кличуть",
-                              player_text or "", re.I)
-        if PLAYER_NAME and (asks_name or random.random() < 0.5):
-            player += f", stalkers know him as «{PLAYER_NAME}»; don't open with it"
+        # Everyone knows his nickname (PLAYER_NAME); lines that open with it are thinned out after the reply.
+        if PLAYER_NAME:
+            player += f", known in the Zone as «{PLAYER_NAME}»: you know his name; use it only now and then"
         player += ")"
         if mode != "greet":  # greetings kept turning into jokes about his rifle
             player += f": holding {item_name(actor.get('weapon'))}"
@@ -1589,6 +1660,9 @@ class Brain:
             player += ", looks badly hurt"
         if mode != "twitch":  # a %retold thought isn't about the player: showing him made the NPC answer him
             parts.append(player + ".")
+            if PLAYER_BIO and mode != "hostile":
+                parts.append(f"What people in the Zone know about him: {PLAYER_BIO} Keep it in mind: it shapes how "
+                             "you see and treat him, and you may bring it up when it fits (not in every line).")
 
         if n_people:
             others = [n for n in state.get("npcs", []) if isinstance(n, dict) and n.get("id") != npc.get("id")
@@ -1661,6 +1735,25 @@ class Brain:
                 parts.append(lore)
         if mode in ("reply", "addressed") and ACCUSE_WORDS.search(player_text or (extra or {}).get("line", "")):
             parts.append("He claims you did something, or asks if you did. This time: " + accused_stance(npc) + ".")
+        if mode in ("reply", "addressed") and ASKS_HIS_NAME.search(player_text or (extra or {}).get("line", "")):
+            parts.append(f"He asks your name: tell it plainly, «{npc.get('name')}» (or just the first part).")
+        # He asks to be paid for his help (a medkit, a hand in a fight)
+        if mode == "reply" and PAY_ASK.search(player_text or "") and not npc.get("wounded"):
+            if "You owe him for:" in (remembers or ""):
+                cash = npc.get("money")
+                parts.append(
+                    "He asks you to pay him back for his help (see what you owe him). A decent man pays: name a fair sum "
+                    "around the reward given and pay it with [ACTION: give N] on a new line"
+                    + (f" (you have {cash} coupons, never more)" if cash is not None else "")
+                    + ". You may haggle a little or pay less if you're short; a bandit may try to weasel out. "
+                      "When you pay, the words and the tag go together.")
+            else:
+                parts.append("He asks you for money, but you owe him nothing (no help from him that you remember): "
+                             "don't pay; refuse or laugh it off in character.")
+        if mode in ("reply", "addressed") and ASKS_OWN_NAME.search(player_text or (extra or {}).get("line", "")):
+            parts.append("He asks HIS OWN name (what people call him, maybe testing you): "
+                         + (f"it's «{PLAYER_NAME}», say so in your own words." if PLAYER_NAME
+                            else "you don't know it, say so."))
         asked = gesture_asked(player_text or (extra or {}).get("line", "")) if mode in ("reply", "addressed") else None
         if asked and npc.get("relation") != "enemy" and not npc.get("wounded") and not is_monolith(npc):
             parts.append(f"He asks you to make a gesture ({asked}). You do it, grumbling or joking if you like: add "
@@ -1751,7 +1844,10 @@ class Brain:
         ask = (f"What I remembered before: {old_summary or 'nothing'}\nOur older talks:\n{talk}\n\n"
                "Write my updated memory of this player in at most 45 words, English, first person, about 'him'. "
                "Keep only what matters later: promises, debts, deals, favours, insults, names, places, "
-               "how I feel about him now. No quotes, no lists.")
+               "how I feel about him now. No quotes, no lists. "
+               + (f"His nickname is {PLAYER_NAME}. " if PLAYER_NAME else "I don't know his name. ")
+               + "A name he says when speaking to me is MY name or another man's, never his own; don't call him "
+                 "by it.")
         system = "You compress a game character's memories into a short note."
         return self.ask_gemini(ask, system) if LLM_PROVIDER == "gemini" else self.ask_claude(ask, system)
 
@@ -1830,6 +1926,8 @@ class Brain:
         lore = lore_for(said)
         if lore:
             parts.append(lore)
+        if PLAYER_BIO and speaker.startswith("The player"):
+            parts.append(f"What people in the Zone know about the player: {PLAYER_BIO} It shapes how they treat him.")
         parts.append(f"{speaker} says to all of them: «{said}»")
         lead = self.group_lead(men) if GROUP_STYLE == "lead" else None
         if lead is not None:
@@ -2487,6 +2585,12 @@ class Talker:
                 for n in npcs:  # only men who could see it: near the victim or in the same area
                     if n.get("id") != victim.get("id") and knows(n, victim):
                         self.memory.witness(self.npc_key(n, state, level), what)
+                        # he was fighting that man (or that man's side) and the player shot him: a hand in the fight
+                        if n.get("relation") != "enemy" and (n.get("in_combat") or n.get("fighting")) and \
+                                (n.get("fighting") == victim.get("story_name") or victim.get("relation") == "enemy"):
+                            self.memory.owe(self.npc_key(n, state, level),
+                                            f"he helped you in a fight: killed {victim.get('name')} who was attacking",
+                                            700)
             elif ev.get("type") == "actor_hit_npc" and ev.get("npc"):
                 self.memory.witness(self.npc_key(ev["npc"], state, level), "he shot at me")
             elif ev.get("type") == "order" and ev.get("npc") and ev.get("changed"):
@@ -2604,6 +2708,9 @@ class Talker:
                 if amount > 0:
                     self.game.send("act", npc["id"], f"give:{amount}")
                     log(f"{name} pays you {amount} (if he has it)")
+                    if self.memory.owed(key):  # paying back for the medkit / the fight: that debt is settled
+                        self.memory.settle(key, amount)
+                        log(f"{name}: debt to you settled")
         for arg, section in items:
             self.game.send("act", npc["id"], f"item:{section}{paid}")
             log(f"{name} -> gives you {arg}")
@@ -2765,31 +2872,41 @@ class Talker:
                          daemon=True).start()
 
     def on_push_to_talk(self):
-        if self.recording or not getattr(self, "game_on", True) or not self.busy.acquire(blocking=False):
+        if self.recording or not getattr(self, "game_on", True):
             return
+        # Record and understand him right away, even while an NPC is still talking; the answer waits its turn
+        # (before, a press during someone's line was simply lost and he had to say it again).
         self.recording = True
         try:
             if not self.game_ptt:  # in-game push-to-talk shows "Слухаю..." at the bottom instead
                 self.game.send("info", None, "Запис... говоріть")
             log("● Recording...")
-            try:
-                audio = self.ears.record_while_held(self.ptt_held)
-            finally:
-                self.recording = False
-            state = self.game.state()
+            audio = self.ears.record_while_held(self.ptt_held)
+            text = self.ears.transcribe(audio)
+        except Exception as exc:
+            log(f"error: {exc!r}")
+            return
+        finally:
+            self.recording = False
+        log(f"You: {text or '(nothing heard)'}")
+        if text:
+            if SUBTITLES in ("bottom", "both"):
+                self.game.send("sub", None, text)  # your own words, until the answer replaces them
+            if SUBTITLES in ("pda", "both"):
+                self.game.send("you", None, text)
+        else:
+            self.game.send("info", None, "Не розчув, спробуйте ще раз")
+        if self.busy.locked():
+            log("  (someone is still talking: your words wait for him to finish)")
+        if not self.busy.acquire(timeout=90):
+            log("  (waited too long, your words were dropped)")
+            return
+        try:
+            state = self.game.state()  # fresh: people may have moved while he waited
             if not state:
                 log("Game state not found. Is the game running with the mod installed?")
                 return
-            text = self.ears.transcribe(audio)
             npc = self.game.pick_listener(state, text)
-            log(f"You: {text or '(nothing heard)'}")
-            if text:
-                if SUBTITLES in ("bottom", "both"):
-                    self.game.send("sub", None, text)  # your own words, until the answer replaces them
-                if SUBTITLES in ("pda", "both"):
-                    self.game.send("you", None, text)
-            else:
-                self.game.send("info", None, "Не розчув, спробуйте ще раз")
             if text and to_everyone(text) and self.group_answer(state, text, f"The player (a stalker{' called ' + PLAYER_NAME if PLAYER_NAME else ''})",
                                                                      from_player=True):
                 return  # "Пацани, ..." — several men around answered
@@ -3223,6 +3340,7 @@ class Talker:
                 log(f"{npc.get('name')} was saved by you (medkit)")
                 self.memory.witness(self.npc_key(npc, state),
                                     "he saved my life: gave me a medkit when I lay dying (this outweighs old quarrels)")
+                self.memory.owe(self.npc_key(npc, state), "he gave you his medkit when you lay dying", 400)
                 if not CHAT_ONLY:
                     what = ("You were lying wounded and dying, and the player just saved your life with his medkit. "
                             "Thank him your own way (gruff, emotional or joking), not about anything else.")
