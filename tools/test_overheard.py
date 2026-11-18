@@ -51,7 +51,6 @@ class FakeBrain:
 t.brain = FakeBrain()
 sent = []
 t.game.send = lambda *x: sent.append(x)
-t.play_overheard = lambda *x: talker.Talker.play_overheard(t, *x)
 t.speak_lines = lambda ls, st, notes=None, gestures=None: said.extend((n["name"], l, notes) for n, l in ls)
 t._chat(a, b, state)
 ok &= check(seen_nearby == ["Вовк"], f"nearby given to the chat prompt: {seen_nearby}")

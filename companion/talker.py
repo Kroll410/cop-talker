@@ -402,6 +402,7 @@ def knows(npc, who):
 
 
 EARSHOT = 12  # metres: a man this close to the talkers hears them (and his name)
+PLAYER_TALKER = {"player": True, "name": "", "id": None}  # the player, as one side of an overheard talk
 
 
 def in_earshot(npc, talkers):
@@ -1986,17 +1987,29 @@ class Brain:
     def overheard(self, c, a, b, lines, state, remembers=""):
         """C heard A and B talk about him by name. He reacts like a real man would, and they may answer back:
         a laugh, a friendly jab, or (if they badmouthed him) a confrontation that can end in shooting.
-        Returns [(npc, line, emote, kills), ...], C first; kills = [target npc] he opens fire on."""
-        talk = "\n".join(f"{'A' if n is a else 'B'} ({n.get('name')}): {strip_tags(line)}" for n, line in lines)
+        A may be the player (PLAYER_TALKER): nobody writes lines for him, and shooting at him = turning hostile.
+        Returns [(npc, line, emote, kills), ...], C first; kills = [target] he opens fire on (maybe the player)."""
+        player = a.get("player")
+        tag = lambda n: "A" if n is a else "B" if n is b else "C"
+        talk = "\n".join(f"{tag(n)} ({'the player' if n.get('player') else n.get('name')}): {strip_tags(line)}"
+                         for n, line in lines)
         where = place_name(c.get("place")) or LEVELS.get(state.get("level"), state.get("level"))
         rel = lambda x, y: ("same faction" if x.get("community") == y.get("community") else
                             f"{COMMUNITIES.get(x.get('community'), x.get('community'))} vs "
                             f"{COMMUNITIES.get(y.get('community'), y.get('community'))}")
-        parts = [f"C: {npc_brief(c)}", f"A: {npc_brief(a)}", f"B: {npc_brief(b)}",
-                 f"Where: {where}, {weather_name(state.get('weather'))}. C and A: {rel(c, a)}; C and B: {rel(c, b)}.",
+        if player:
+            who_a = ("A: the player, a stalker" + (f" known as «{PLAYER_NAME}»" if PLAYER_NAME else "")
+                     + (f". What people know about him: {PLAYER_BIO}" if PLAYER_BIO else "") + ".")
+            ties = f"C and B: {rel(c, b)}."
+        else:
+            who_a, ties = f"A: {npc_brief(a)}", f"C and A: {rel(c, a)}; C and B: {rel(c, b)}."
+        parts = [f"C: {npc_brief(c)}", who_a, f"B: {npc_brief(b)}",
+                 f"Where: {where}, {weather_name(state.get('weather'))}. {ties}",
                  f"A and B were just talking, and C, standing nearby, heard them mention him by name:\n{talk}"]
         if remembers:
             parts.append(f"C's memory (him = the player): {remembers}")
+        shoot = ("[ACTION: kill Name] (Name = the man he shoots" + (", or [ACTION: hostile] to shoot the player"
+                                                                      if player else "") + ")")
         parts.append(
             "Write what happens next, like a real simulation: C speaks first, to both of them, reacting to what "
             "they actually said about him. Friendly or harmless talk: he jokes back, plays along, corrects them, "
@@ -2004,11 +2017,13 @@ class Brain:
             "may apologise, laugh it off, double down or threaten back; 2-4 lines in total. Each line 3-20 words. "
             "It may escalate to a gunfight ONLY if these men's characters really would (bandits and hotheads, "
             "a serious insult, different factions at odds; same-faction stalkers almost never; scientists and "
-            "story characters never): then the line where a man draws ends with [ACTION: kill Name] (Name = the "
-            "man he shoots), and that is the last line. Most of the time it ends in words. "
+            f"story characters never): then the line where a man draws ends with {shoot}, and that is the last "
+            "line. Most of the time it ends in words. "
             "A line may end with [ACTION: emote X], X one of: " + ", ".join(EMOTES) + ". "
-            f"C is {c.get('name')}, A is {a.get('name')}, B is {b.get('name')}. Nobody says his own name. "
-            "Output lines like \"C: text\", \"A: text\", \"B: text\", nothing else.")
+            + ("A is the player: never write a line for A; only C and B speak. " if player else "")
+            + f"C is {c.get('name')}, " + ("" if player else f"A is {a.get('name')}, ") + f"B is {b.get('name')}. "
+            "Nobody says his own name. Output lines like \"C: text\", "
+            + ("" if player else "\"A: text\", ") + "\"B: text\", nothing else.")
         ask = "\n".join(parts)
         men = {"C": c, "A": a, "B": b}
         for attempt in range(2):
@@ -2020,7 +2035,9 @@ class Brain:
                 if not m or not m.group(2).strip():
                     continue
                 npc = men[m.group(1)]
-                said, _, extras = split_action(m.group(2))
+                if npc.get("player"):
+                    continue  # the player's words are his own
+                said, action, extras = split_action(m.group(2))
                 line = drop_own_name(self.vary_tags(re.sub(r"[*\"«»]", "", said).strip()), npc)
                 if not strip_tags(line).strip():
                     continue
@@ -2030,10 +2047,12 @@ class Brain:
                 kills = []
                 if not npc.get("story") and not npc.get("wounded") and npc.get("community") != "ecolog":
                     for kind, arg in extras:
-                        target = next((x for x in (a, b, c) if x is not npc and mentions(x, arg)), None) \
-                            if kind == "kill" else None
+                        target = next((x for x in (a, b, c) if x is not npc and not x.get("player")
+                                       and mentions(x, arg)), None) if kind == "kill" else None
                         if target and not target.get("story"):
                             kills.append(target)
+                    if player and action == "hostile":
+                        kills.append(a)
                 out.append((npc, line, next((arg for kind, arg in extras if kind == "emote"), None), kills))
                 if kills:  # the shooting starts: nothing more is said
                     break
@@ -2709,9 +2728,10 @@ class Talker:
     # ------------------------------------------------------------ one line right after another
     # The voice player plays one line at a time, in order. A follow-up line is written and its voice fetched while
     # the line before it is still playing, so it starts the moment that one ends (no pause for the AI and TTS).
-    def answer_after(self, after, npc, state, mode, extra=None, player_text="", note=None):
+    def answer_after(self, after, npc, state, mode, extra=None, player_text="", note=None, on_written=None):
         """Write `npc`'s reply now, in the background; speak it once the line before it (`after`) has started
-        playing. Returns the thread (join it before the conversation is over)."""
+        playing. on_written(line) runs as soon as it is written. Returns the thread (join it before the
+        conversation is over)."""
         def run():
             try:
                 line = self.brain.reply(npc, state, self.game.describe_events(npc), [], player_text, mode,
@@ -2720,6 +2740,8 @@ class Talker:
                 emote = next((a for k, a in self.brain.last_extras if k == "emote"), None)
                 if not line:
                     return
+                if on_written:
+                    on_written(line)
                 if after is not None:
                     after.wait(30)
                 if self.recording:  # the player started talking: let him
@@ -2986,7 +3008,12 @@ class Talker:
                 state, player_text, f"The player{' «' + PLAYER_NAME + '»' if PLAYER_NAME else ''}"),
                 kwargs={"exclude": npc.get("id"), "after": started, "kind": "story"})
             butt_in.start()
-        elif mode == "reply" and action not in ("warn", "hostile") and random.random() < CHIME_CHANCE:
+        # Someone nearby was named by the player or by him: he heard it and may react to them both.
+        heard = None
+        if player_text and not butt_in and action not in ("warn", "hostile") and not any(k == "kill" for k, _ in extras):
+            heard = self.start_overheard([(PLAYER_TALKER, player_text), (npc, plain)], (PLAYER_TALKER, npc), state)
+        if not butt_in and not heard and mode == "reply" and action not in ("warn", "hostile") \
+                and random.random() < CHIME_CHANCE:
             butt_in = self.chime_in(npc, state, player_text, plain, after=started)
         self.speak(npc, reply, state, note=None if (player_text or mode == "greet") else "(on your own)",
                    on_start=started.set)
@@ -3015,6 +3042,7 @@ class Talker:
             self.squad_backup(npc, state, plain, action)
         if butt_in:
             butt_in.join(60)
+        self.finish_overheard(heard, state)
         return reply, action
 
     def do_deals(self, npc, state, extras, key, player_text):
@@ -3444,34 +3472,61 @@ class Talker:
             if len(lines) < 2 or too_similar(strip_tags(lines[0][1]), self.recent_lines()):
                 return
             log(f"Chat: {a.get('name')} & {b.get('name')}")
-            # Someone around was named: he heard it and reacts, and they may answer back; if they badmouthed him it
-            # can turn into a quarrel or a shoot-out. All of it is written while their talk plays.
-            third, scene = named_bystander(lines, nearby, (a, b)), []
-            writer = None
-            if third:
-                def write():
-                    try:
-                        scene.extend(self.brain.overheard(
-                            third, a, b, lines, state, self.memory.remembers(self.npc_key(third, state))))
-                    except Exception as exc:
-                        log(f"overheard error: {exc!r}")
-                writer = threading.Thread(target=write, daemon=True)
-                writer.start()
+            # Someone around was named: he heard it and reacts (written while their talk plays).
+            heard = self.start_overheard(lines, (a, b), state, bystanders=nearby)
             self.speak_lines(lines, state, notes=[f"(to {(b if npc is a else a).get('name')})" for npc, _ in lines],
                              gestures=list(self.brain.chat_emotes)[:len(lines)])
-            if writer:
-                writer.join(30)
-                if scene and not self.recording:
-                    self.play_overheard(third, a, b, scene, state)
+            self.finish_overheard(heard, state)
         except Exception as exc:
             log(f"chat error: {exc!r}")
         finally:
             self.busy.release()
 
-    def play_overheard(self, third, a, b, scene, state):
-        """Play what happened after `third` heard his name: their words, then the shooting if someone drew."""
+    def bystanders(self, talkers, state):
+        """Men close enough to hear these talkers (NPCs, or the player and an NPC), who could react."""
+        ids = {t.get("id") for t in talkers if not t.get("player")}
+        npc_talkers = [t for t in talkers if not t.get("player")]
+        with_player = any(t.get("player") for t in talkers)
+        return [n for n in state.get("npcs", []) if isinstance(n, dict) and n.get("id") not in ids
+                and n.get("relation") != "enemy" and not n.get("in_combat") and not n.get("wounded")
+                and not is_monolith(n) and n.get("community") != "zombied"
+                and (not with_player or n.get("dist", 99) <= EARSHOT * 1.5) and in_earshot(n, npc_talkers)]
+
+    def start_overheard(self, lines, talkers, state, bystanders=None):
+        """If the talk names a man standing nearby, write his reaction now (while the talk plays).
+        talkers: (a, b), a may be PLAYER_TALKER. Returns a handle for finish_overheard, or None."""
+        try:
+            nearby = self.bystanders(talkers, state) if bystanders is None else bystanders
+            third = named_bystander(lines, nearby, talkers)
+        except Exception as exc:
+            log(f"overheard error: {exc!r}")
+            return None
+        if not third:
+            return None
+        a, b = talkers
+        scene = []
+
+        def write():
+            try:
+                scene.extend(self.brain.overheard(third, a, b, lines, state,
+                                                  self.memory.remembers(self.npc_key(third, state))))
+            except Exception as exc:
+                log(f"overheard error: {exc!r}")
+        writer = threading.Thread(target=write, daemon=True)
+        writer.start()
+        return third, a, b, scene, writer
+
+    def finish_overheard(self, heard, state):
+        """Play what happened after the named man heard it: their words, then the shooting if someone drew."""
+        if not heard:
+            return
+        third, a, b, scene, writer = heard
+        writer.join(30)
+        if not scene or self.recording:
+            return
         log(f"  {third.get('name')} heard his name:")
-        notes = [f"(to {a.get('name')} and {b.get('name')})" if npc is third else f"(to {third.get('name')})"
+        name = lambda n: "you" if n.get("player") else n.get("name")
+        notes = [f"(to {name(a)} and {name(b)})" if npc is third else f"(to {third.get('name')})"
                  for npc, *_ in scene]
         self.speak_lines([(npc, line) for npc, line, *_ in scene], state, notes=notes,
                          gestures=[emote for _, _, emote, _ in scene])
@@ -3479,6 +3534,12 @@ class Talker:
             return
         for npc, _, _, kills in scene:
             for target in kills:
+                if target.get("player"):
+                    if npc.get("relation") != "enemy":
+                        self.game.send("act", npc["id"], "hostile")
+                        self.game.send("info", None, f"{npc.get('name')} відкриває вогонь по вас")
+                        log(f"{npc.get('name')} -> HOSTILE (overheard quarrel)")
+                    continue
                 self.game.send("act", npc["id"], f"kill:{target['id']}")
                 self.game.send("info", None, f"{npc.get('name')} стріляє в {target.get('name')}")
                 log(f"{npc.get('name')} -> KILL {target.get('name')} (overheard quarrel)")
@@ -3609,11 +3670,13 @@ class Talker:
                         emote = next((arg for kind, arg in self.brain.last_extras if kind == "emote"), None)
                 log(f"Twitch ({user}) via {npc.get('name')}: {line}")
                 # Whoever answers him is written NOW, while his line plays, and speaks the moment it ends.
-                started, follow = threading.Event(), None
+                started, follow, heard = threading.Event(), None, []
                 if named:  # the stalker he talked about answers him
-                    follow = self.answer_after(started, named, state, "addressed",
-                                               extra={"name": npc.get("name"), "line": strip_tags(line)},
-                                               note=f"(to {npc.get('name')})")
+                    # and anyone else they name who stands nearby hears it and may react to them both
+                    follow = self.answer_after(
+                        started, named, state, "addressed", extra={"name": npc.get("name"), "line": strip_tags(line)},
+                        note=f"(to {npc.get('name')})", on_written=lambda answer: heard.append(self.start_overheard(
+                            [(npc, line), (named, answer)], (npc, named), state)))
                 elif to_everyone(text) or "?" in text or tells_joke(text):
                     # "$Пацани...", "$Гайз, ви чули...?": the others answer; a joke: they react to it
                     follow = threading.Thread(target=self.group_answer, daemon=True, args=(
@@ -3628,6 +3691,8 @@ class Talker:
                 started.set()
                 if follow:
                     follow.join(90)
+                for h in heard:
+                    self.finish_overheard(h, state)
             if self.twitch:
                 self.twitch.finish(redemption, spoken=True)
         except Exception as exc:
