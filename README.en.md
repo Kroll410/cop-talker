@@ -14,18 +14,77 @@
 
 ## What's in it
 
-A mod for S.T.A.L.K.E.R.: Call of Pripyat that lets you talk to NPCs by voice. Look at a stalker, hold T, say something in Ukrainian, and he answers in his own in-game voice.
+A mod for S.T.A.L.K.E.R.: Call of Pripyat that lets you talk to NPCs by voice. Look at a stalker, hold T, say something in Ukrainian, and he answers in an in-game voice. Each NPC always keeps the same voice.
 
-NPCs answer based on their faction, rank, wounds, the weather, emissions and whatever you talked about before. Memory survives restarts. They also speak up on their own: greetings, reactions when you pick up an artifact or walk into an anomaly, chats with each other. Sometimes they bring up life back home or real news, pulled from the Suspilne, BBC Ukrainian and TSN RSS feeds.
+How NPCs talk:
+- they go by faction, rank, wounds, the weather, emissions and what you talked about before (memory survives restarts);
+- they know your name and backstory from the settings and treat you accordingly;
+- they only know what happened near them. Far-away events reach them later, as rumours;
+- they recognise characters from the series (Strelok, the Marked One, Sidorovich…) and talk about them true to the lore;
+- they talk about anything: the Zone, home, real news (Suspilne, BBC Ukrainian and TSN RSS; a story isn't repeated unless it's big), jokes, dirty stuff, nonsense;
+- they react to accusations in different ways: own up, brag, wriggle out;
+- they swear; bandits also use slurs, Monolith and scientists never do.
+
+They also speak up on their own: greetings, reactions when you pick up an artifact or walk into an anomaly, combat remarks (only when they're actually fighting), chats with each other. Tell a joke and the people around laugh or say it was lame. If you get killed, the killer mocks you.
 
 Conversations can change things in the game:
-- a gesture;
+- a gesture (wave, salute…), also on request;
 - following you or staying put;
 - turning hostile or becoming a friend;
 - selling or buying an item, handing over money;
+- paying a debt: if you gave him a medkit or helped him fight someone off, you can ask for money;
 - taking a paid hit. If the target is far away, the killer's squad goes looking for him.
 
-There's Twitch support. Chat messages starting with `$` are said word for word, and messages starting with `%` are retold in the NPC's own words. Each viewer sticks to one NPC, and their nick shows next to his name when you look at him.
+There's Twitch support: a chat message is said by an NPC nearby, each viewer sticks to one NPC, and the viewer's nick shows next to his name.
+
+## How to use
+
+1. Start the game and load a save.
+2. Open StalkerTalker from the desktop and click **Start**. The window shows a log: what you said and who answered what.
+3. Walk up to a stalker, look at him, hold **T** and talk. Let go when you're done. If you aren't looking at anyone, the nearest one answers.
+
+Things you can say (in Ukrainian, in your own words):
+- "Привіт, що нового?", "Що чув у новинах?", "Розкажи анекдот"
+- "Гайз, ви чули…", "Пацани, всі сюди": the group answers (the leader, the others mutter around him)
+- "Помахай мені", "Віддай честь": a gesture
+- "Ходи за мною" / "Стій тут" (or the **Y** / **U** keys)
+- "Продай хліб за 50", "Купую", "Візьми мою ковбасу за 100"
+- "Ти мені винен за аптечку"
+- "Вбий Борова, дам 5000"
+- "Це ти вбив Фаната?": an accusation
+
+You can press T while an NPC is still talking: your line is recorded and queued. The one who just spoke to you answers, keeping in mind what he said.
+
+Settings are in the Settings tab (which is just `settings.ini`). The main ones:
+- `PLAYER_NAME`: what stalkers call you; `PLAYER_BIO`: your backstory;
+- `LLM_PROVIDER`: `gemini` or `claude`;
+- `FUN_LEVEL`: how many jokes and how much swearing;
+- `GROUP_STYLE`: `lead` (one answers, the others mutter) or `all` (in turn);
+- `OUTSIDE_TALK`, `NEWS_FEEDS`: talk about life outside the Zone and the news.
+
+After changing them, click **Save and restart**.
+
+### Twitch
+
+1. Register an app on dev.twitch.tv (Public type).
+2. Put the Client ID in `.env` (`TWITCH_CLIENT_ID`).
+3. In Settings: `TWITCH_ENABLED=1`, your channel in `TWITCH_CHANNEL`.
+4. In the window, click **Authorize Twitch app** and enter the code on Twitch. The sign-in is kept between runs.
+
+In chat:
+- `$text`: the NPC says it word for word;
+- `%text`: the NPC retells it his own way;
+- talking to everyone ("гайз", plural "ви"): several NPCs answer.
+
+A viewer gets linked to an NPC within `TWITCH_DISTANCE`. If that NPC dies or is far away, the viewer moves to another one.
+
+## Keys
+
+- T (hold): talk
+- Y: the NPC follows you
+- U: the NPC stays put
+
+You can rebind them in `gamedata\configs\scripts\talker.ltx`.
 
 ## How it works
 
@@ -33,7 +92,7 @@ Two parts: a Lua script in the game (`mod\gamedata`) and a Python app (`companio
 - the game writes `state.json` (who's around, the player, the level) and `events.jsonl` (what happened);
 - the app writes `inbox.txt` (what to say and do).
 
-The app transcribes your speech, asks an LLM for a reply, voices it with ElevenLabs and plays it with distance-based volume. The game shows subtitles, moves the NPC's mouth and carries out actions.
+The app transcribes your speech, asks an LLM for a reply, voices it with ElevenLabs and plays it with distance-based volume. In a dialogue the next line is prepared while the previous one plays. The game shows subtitles, moves the NPC's mouth and carries out actions.
 
 Besides `talker_bridge.script`, the mod touches 6 original game scripts, adding a one-line hook to each (see `tools\patch_hooks.py`).
 
@@ -47,12 +106,12 @@ Built with:
 
 ## Install
 
-1. Download the repo anywhere.
+1. `git clone` the repo anywhere (that's what makes the Update button work).
 2. Run `setup.bat`. It:
    - installs dependencies into `.venv`;
    - asks where the game is;
    - copies the mod into `gamedata`;
-   - creates `.env`;
+   - creates `.env` and `settings.ini`;
    - adds a desktop shortcut;
    - optionally cuts voice samples into `samples\`.
 3. Fill in `.env`:
@@ -63,25 +122,10 @@ Built with:
    - install Claude Code;
    - run `claude` and `/login`;
    - set `LLM_PROVIDER=claude` in `settings.ini`.
-5. Start the game, load a save, open StalkerTalker from the desktop.
-
-## Keys
-
-- T (hold): talk
-- Y: the NPC follows you
-- U: the NPC stays put
-
-You can rebind them in `gamedata\configs\scripts\talker.ltx`. Everything else is in the Settings tab (which is just `settings.ini`).
-
-To connect Twitch:
-1. Register an app on dev.twitch.tv (Public type).
-2. Put the Client ID in `.env` (`TWITCH_CLIENT_ID`).
-3. Put your channel in `TWITCH_CHANNEL`.
-4. In the window, click Twitch → Authorize.
 
 ## Updating and removing
 
-If you installed with `git clone`, update with the **Update** button in the window. It runs `git pull`, adds new options to your `settings.ini`, reinstalls the mod in the game if needed and restarts. Your `settings.ini`, `.env` and NPC memory are never touched.
+Update with the **Update** button in the window. It runs `git pull`, adds new options to your `settings.ini`, reinstalls the mod in the game if needed and restarts. Your `settings.ini`, `.env`, NPC memory and Twitch sign-in are never touched.
 
 After the mod changes, reload your save, since the game only reads scripts on load. The app tells you if the game is still running an older script.
 
