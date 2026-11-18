@@ -94,6 +94,7 @@ GEMINI_SMART_MODEL = os.environ.get("GEMINI_SMART_MODEL", "gemini-3.1-flash-lite
 SMART_WORDS = int(os.environ.get("SMART_WORDS", "10"))  # player messages at least this long use it
 TTS_SPEED = float(os.environ.get("TTS_SPEED", "0.85"))  # 0.7 slowest .. 1.2 fastest
 NPC_VOLUME = float(os.environ.get("NPC_VOLUME", "0.55"))  # overall NPC voice volume, 0..1
+LINE_GAP = float(os.environ.get("LINE_GAP", "0.3"))  # at least this many seconds between two lines
 VOLUME_NEAR = float(os.environ.get("VOLUME_NEAR", "1.5"))  # metres at full volume
 VOLUME_HALF = float(os.environ.get("VOLUME_HALF", "2.5"))  # every this many metres further the volume drops
 VOLUME_MIN = float(os.environ.get("VOLUME_MIN", "0.08"))  # never quieter than this (far shouts stay audible)
@@ -996,6 +997,35 @@ ASKS_OWN_NAME = re.compile(r"хто я\b|хто я такий|як мене (з�
                            r"мо[єе] прізвисько|моє погоняло|знаєш мене|мене знаєш|як звуть гравця|ім'я гравця", re.I)
 
 
+# Asking for a joke or a story ("розкажи анекдот"), and telling one ("Приходить сталкер до бару...").
+ASKS_STORY = re.compile(r"анекдот|жарт|пожартуй|смішн|розсміши|розкажи|історі|байк|прикол", re.I)
+JOKE_SIGNS = re.compile(r"анекдот|жарт|прикол|байк|(?:^|[.!…]\s*)(приходить|заходить|приходять|заходять|йде|ідуть|"
+                        r"сидять|сидить|летить|зустрічаються|зустрілися|питає|питають|якось|одного разу|"
+                        r"сталкер і|бандит і|два сталкери|три сталкери)\b", re.I)
+
+
+def tells_joke(text):
+    """The words are a joke or story being told (not a request for one): long enough and shaped like one."""
+    words = re.findall(r"\w+", text or "")
+    return len(words) >= 12 and bool(JOKE_SIGNS.search(text or "")) and \
+        not re.search(r"розкажи|розкажіть|знаєш (якийсь|анекдот)|є анекдот", text or "", re.I)
+
+
+def drop_echo(text, player_text):
+    """"Ага, чув. А ти чув..." after the player said "Ага, чув.": the model repeated his words before its own.
+    Drop that parroted opening (a short repeat as a question, "Є одна пляшка?", stays: that's a real reaction)."""
+    said = re.sub(r"[^\w\s']", "", (player_text or "").lower()).split()
+    if not said or not text:
+        return text
+    m = re.match(r"^\s*([^.!?…]*[.!…]+)\s*(.+)$", text, re.S)  # first sentence (not a question) + the rest
+    if not m:
+        return text
+    first = re.sub(r"[^\w\s']", "", m.group(1).lower()).split()
+    if first and first == said[:len(first)] and len(first) >= min(2, len(said)):
+        return m.group(2).strip()[:1].upper() + m.group(2).strip()[1:]
+    return text
+
+
 def thin_player_name(text, keep=0.35):
     """The model loves opening every line with the player's name ("Бродяго, ..."): keep that only in about
     one line of three."""
@@ -1104,6 +1134,7 @@ class Game:
             self.events_pos = events.stat().st_size  # skip old events
         self.recent_events = []
         self.last_used_npc = (None, 0.0)
+        self.last_spoke_to_player = (None, 0.0, "")  # (npc id, when, what he said to the player)
         self.last_emission, self.emission_ended_at = False, None
 
     def state(self):
@@ -1181,6 +1212,10 @@ class Game:
         for n in npcs:  # the one you name
             if mentions(n, text) and in_range(n, 20):
                 return n
+        # the one who just said something to you: you're most likely answering him
+        spoke_id, spoke_at, _ = self.last_spoke_to_player
+        if spoke_id in by_id and time.time() - spoke_at < 25 and in_range(by_id[spoke_id], 15):
+            return by_id[spoke_id]
         target = state.get("target_id") if state else None
         if target in by_id and in_range(by_id[target], 15):
             return by_id[target]
@@ -1425,7 +1460,7 @@ class Brain:
             text = self.ask_gemini(ask, system, smart) if LLM_PROVIDER == "gemini" else self.ask_claude(ask, system)
             text, self.last_action, self.last_extras = split_action(text or "")
             text = drop_legend_address(drop_own_name(drop_narration(text, npc), npc))
-            text = thin_player_name(text)
+            text = drop_echo(thin_player_name(text), player_text)
             # asked to wave, salute, sit...: he does it even if the model forgot the tag (not enemies, not the dying)
             asked = gesture_asked(player_text or (extra or {}).get("line", "")) if mode in ("reply", "addressed") else None
             if asked and npc.get("relation") != "enemy" and not npc.get("wounded") and not is_monolith(npc) \
@@ -1458,6 +1493,9 @@ class Brain:
             fake = phantom_items(text, stock + ((state.get("actor") or {}).get("stock") or [])) + \
                 [(None, arg) for k, arg in self.last_extras
                                                   if k == "item" and not find_stock_item(stock, arg)]
+            # an item the player himself just mentioned ("Є одна пляшка") is his, not a lie about the NPC's
+            said = (player_text or "").lower()
+            fake = [(s, w) for s, w in fake if not (s is not None and w and w.lower()[:4] in said)]
             if fake and mode == "reply" and not is_monolith(npc):  # not for Twitch retells or chatter
                 words = sorted({w for _, w in fake})
                 if attempt < 2:
@@ -1671,7 +1709,8 @@ class Brain:
         player = f"Player ({rel}, {npc.get('dist', 0):.0f} m away"
         # Everyone knows his nickname (PLAYER_NAME); lines that open with it are thinned out after the reply.
         if PLAYER_NAME:
-            player += f", known in the Zone as «{PLAYER_NAME}»: you know his name; use it only now and then"
+            player += (f", known in the Zone as «{PLAYER_NAME}»: that's HIM, the man you're talking to (never speak "
+                       "of him in the third person); use his name only now and then")
         player += ")"
         if mode != "greet":  # greetings kept turning into jokes about his rifle
             player += f": holding {item_name(actor.get('weapon'))}"
@@ -1756,6 +1795,9 @@ class Brain:
                 parts.append(lore)
         if mode in ("reply", "addressed") and ACCUSE_WORDS.search(player_text or (extra or {}).get("line", "")):
             parts.append("He claims you did something, or asks if you did. This time: " + accused_stance(npc) + ".")
+        if mode == "reply" and (extra or {}).get("just_said"):
+            parts.append(f"You just said to him: «{extra['just_said']}». His words are most likely his answer to "
+                         "that (or his reaction to it): respond in that light, as the same conversation.")
         if mode in ("reply", "addressed") and ASKS_HIS_NAME.search(player_text or (extra or {}).get("line", "")):
             parts.append(f"He asks your name: tell it plainly, «{npc.get('name')}» (or just the first part).")
         # He asks to be paid for his help (a medkit, a hand in a fight)
@@ -1923,7 +1965,7 @@ class Brain:
         self.chat_emotes = self.chat_emotes[:4]
         return lines[:4]
 
-    def group(self, men, state, said, speaker, remembers=None, speaker_npc=None):
+    def group(self, men, state, said, speaker, remembers=None, speaker_npc=None, kind="talk"):
         """Someone addressed everybody: in ONE request, decide who of the men around answers and how.
         Returns [(npc, line, actions), ...], 0..GROUP_MAX answers, the way a real group reacts.
         actions: ("hostile", None) to attack the player, ("kill", name) to attack someone in sight."""
@@ -1949,9 +1991,20 @@ class Brain:
             parts.append(lore)
         if PLAYER_BIO and speaker.startswith("The player"):
             parts.append(f"What people in the Zone know about the player: {PLAYER_BIO} It shapes how they treat him.")
-        parts.append(f"{speaker} says to all of them: «{said}»")
-        lead = self.group_lead(men) if GROUP_STYLE == "lead" else None
-        if lead is not None:
+        story = kind == "story"
+        if story:
+            parts.append(f"{speaker} just told a joke or a story everyone around heard: «{said}»")
+        else:
+            parts.append(f"{speaker} says to all of them: «{said}»")
+        lead = self.group_lead(men) if GROUP_STYLE == "lead" and not story else None
+        if story:
+            parts.append(
+                f"How do the men around react? Like at a real campfire: 1 to {GROUP_MAX} of them, often two; each "
+                "his own way: laughs (put [laughs] or [chuckles] in the line), groans that it's lame or old, tops it "
+                "with a one-liner of his own, or turns it into a little talk about what it was about; later ones may "
+                "react to earlier ones. Each line 2-20 words. Output lines like \"2: text\" with the man's number, "
+                "nothing else.")
+        elif lead is not None:
             asked = bool(QUESTION_WORDS.search(said or ""))
             parts.append(
                 f"Man {lead + 1} speaks for the group: he {'answers the question' if asked else 'answers'} "
@@ -1964,11 +2017,12 @@ class Brain:
             parts.append(f"Who answers, and what? Like a real group: answer only if it makes sense; 1 to {GROUP_MAX} "
                          "of them, usually not everyone; later ones may react to earlier ones (agree, argue, joke). "
                          "Each line 2-25 words. Output lines like \"2: text\" with the man's number, nothing else.")
-        parts.append("Deeds, not just words: if a man would really act on it (he is offered money to shoot someone and "
-                     "the price or the joke is worth it to him, he is challenged or provoked), end his line with "
-                     "[ACTION: kill Name] to open fire on that man in sight (the speaker too, if he asked for it), "
-                     "or [ACTION: hostile] to open fire on the player. Bandits jump at it, honest stalkers rarely, "
-                     "scientists never. Most groups just talk.")
+        if not story:
+            parts.append("Deeds, not just words: if a man would really act on it (he is offered money to shoot someone "
+                         "and the price or the joke is worth it to him, he is challenged or provoked), end his line with "
+                         "[ACTION: kill Name] to open fire on that man in sight (the speaker too, if he asked for it), "
+                         "or [ACTION: hostile] to open fire on the player. Bandits jump at it, honest stalkers rarely, "
+                         "scientists never. Most groups just talk.")
         system = GROUP_SYSTEM
         text = self.ask_gemini("\n".join(parts), system) if LLM_PROVIDER == "gemini" else \
             self.ask_claude("\n".join(parts), system)
@@ -2086,7 +2140,31 @@ class Voice:
         log(f"{', '.join(names) or 'A voice'} in .env points to a voice deleted in ElevenLabs; using another voice. "
             "Remove or replace that line in .env.")
 
+    VOICES_FILE = ROOT / "npc_voices.json"  # which voice each NPC spoke with: he keeps it
+
     def voice_for(self, npc):
+        """The voice this NPC spoke with before (saved), so he never changes voice; the first time, the
+        faction clone if you made one (bandit, Freedom, military), else the actor's stalker voice."""
+        who = npc.get("story_name") or (str(npc["id"]) if npc.get("id") is not None else None)
+        if not hasattr(self, "kept_voices"):
+            try:
+                self.kept_voices = json.loads(self.VOICES_FILE.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                self.kept_voices = {}
+        kept = self.kept_voices.get(who) if who else None
+        configured = {v for k, v in os.environ.items() if k.startswith("VOICE_") and v}
+        if kept and kept not in self.dead and kept in configured:  # still in your .env and not deleted
+            return kept
+        voice = self.pick_voice(npc)
+        if who and voice:
+            self.kept_voices[who] = voice
+            try:
+                self.VOICES_FILE.write_text(json.dumps(self.kept_voices, indent=1), encoding="utf-8")
+            except OSError:
+                pass
+        return voice
+
+    def pick_voice(self, npc):
         """Faction-specific clone if you made one (bandit, Freedom, military), else the actor's stalker voice."""
         actor = voice_key(npc)
         m = re.search(r"human_0\d\\(\w+)", npc.get("voice") or "")
@@ -2167,6 +2245,8 @@ class Voice:
                 with play_lock:
                     start()
                     self.play_spatial(source, npc, current_dist, volume)
+                    if not overlap:  # a breath before the next line (mutters overlap on purpose)
+                        time.sleep(LINE_GAP)
                 return
             if other_voice(source.error):
                 return
@@ -2193,6 +2273,8 @@ class Voice:
         with play_lock:
             start()
             self.play_spatial(source, npc, current_dist, volume)
+            if not overlap:  # a breath before the next line (mutters overlap on purpose)
+                time.sleep(LINE_GAP)
 
     def play_spatial(self, source, npc, current_dist, volume=1.0):
         """Play as the audio arrives, with volume that follows the live distance: walk away mid-sentence
@@ -2734,6 +2816,10 @@ class Talker:
 
     def converse(self, npc, state, player_text, mode=None, extra=None):
         key = self.npc_key(npc, state)
+        # He just said something to the player (a question, a greeting): the player's words answer that
+        spoke_id, spoke_at, spoke_line = self.game.last_spoke_to_player
+        if player_text and spoke_id == npc.get("id") and time.time() - spoke_at < 60 and spoke_line:
+            extra = dict(extra or {}, just_said=spoke_line)
         reply = self.brain.reply(npc, state, self.game.describe_events(npc), self.memory.history(key), player_text, mode,
                                  recent=self.recent_lines(), extra=extra, remembers=self.memory.remembers(key))
         if not reply:
@@ -2750,11 +2836,26 @@ class Talker:
                 self.game.send("act", npc["id"], f"emote:{arg}")
         # A bystander may butt in: his line is written while this one plays, and follows it at once.
         started, butt_in = threading.Event(), None
-        if mode == "reply" and action not in ("warn", "hostile") and random.random() < CHIME_CHANCE:
+        if mode == "reply" and action not in ("warn", "hostile") and ASKS_STORY.search(player_text or "") \
+                and len(re.findall(r"\w+", plain)) >= 12:
+            # he told the joke or story the player asked for: the men around react (laugh, groan, top it)
+            butt_in = threading.Thread(target=self.group_answer, daemon=True, args=(state, plain, npc.get("name")),
+                                       kwargs={"exclude": npc.get("id"), "speaker_npc": npc, "after": started,
+                                               "kind": "story"})
+            butt_in.start()
+        elif mode == "reply" and tells_joke(player_text):
+            # the player told a joke: this man answers it first, then the others react
+            butt_in = threading.Thread(target=self.group_answer, daemon=True, args=(
+                state, player_text, f"The player{' «' + PLAYER_NAME + '»' if PLAYER_NAME else ''}"),
+                kwargs={"exclude": npc.get("id"), "after": started, "kind": "story"})
+            butt_in.start()
+        elif mode == "reply" and action not in ("warn", "hostile") and random.random() < CHIME_CHANCE:
             butt_in = self.chime_in(npc, state, player_text, plain, after=started)
         self.speak(npc, reply, state, note=None if (player_text or mode == "greet") else "(on your own)",
                    on_start=started.set)
         started.set()
+        if mode in ("reply", "greet", "companion", "react", "event", "hostile"):  # these are said TO the player
+            self.game.last_spoke_to_player = (npc.get("id"), time.time(), plain)
         self.do_deals(npc, state, extras, key, player_text)
         current = {"enemy": "hostile", "friend": "friend"}.get(npc.get("relation"), "calm")
         redundant = action == current or (action == "follow" and npc.get("following")) or \
@@ -2943,11 +3044,13 @@ class Talker:
         if not what:
             for m in state.get("mutants", []):
                 if isinstance(m, dict) and m.get("id") not in self.seen_mutants and m.get("dist", 99) < 35:
-                    self.seen_mutants.add(m.get("id"))
-                    near = [n for n in npcs if n.get("dist", 99) < 25 and not n.get("wounded")]
+                    # only men actually fighting talk about it: a dog wandering past isn't worth a word
+                    near = [n for n in npcs if n.get("dist", 99) < 25 and not n.get("wounded") and n.get("in_combat")]
                     if near:
+                        self.seen_mutants.add(m.get("id"))
                         urgent, speaker = True, near[0]
-                        what = f"You spot a {mutant_name(m.get('kind'))} about {m.get('dist', 0):.0f} m away."
+                        what = (f"A {mutant_name(m.get('kind'))} is attacking, about {m.get('dist', 0):.0f} m away, "
+                                "and you're fighting it.")
                         break
         if not what:
             for n in npcs:
@@ -3017,7 +3120,8 @@ class Talker:
                 return
             npc = self.game.pick_listener(state, text)
             if text and to_everyone(text) and self.group_answer(state, text, f"The player (a stalker{' called ' + PLAYER_NAME if PLAYER_NAME else ''})",
-                                                                     from_player=True):
+                                                                     from_player=True,
+                                                                     kind="story" if tells_joke(text) else "talk"):
                 return  # "Пацани, ..." — several men around answered
             if not npc:
                 log("Nobody close enough to hear you.")
@@ -3082,7 +3186,7 @@ class Talker:
         npcs = [n for n in state.get("npcs", []) if isinstance(n, dict) and not n.get("wounded")]
 
         hostile = [n for n in npcs if n.get("relation") == "enemy" and n.get("dist", 99) < 35
-                   and (n.get("in_combat") or n.get("dist", 99) < 15)]
+                   and n.get("in_combat")]  # only enemies actually fighting shout, not every one in sight
         if hostile and random.random() < HOSTILE_CHANCE:
             npc = random.choice(hostile[:3])
             self.next_proactive = now + HOSTILE_COOLDOWN
@@ -3336,10 +3440,12 @@ class Talker:
                     follow = self.answer_after(started, named, state, "addressed",
                                                extra={"name": npc.get("name"), "line": strip_tags(line)},
                                                note=f"(to {npc.get('name')})")
-                elif to_everyone(text) or "?" in text:  # "$Пацани...", "$Гайз, ви чули...?": the others answer
+                elif to_everyone(text) or "?" in text or tells_joke(text):
+                    # "$Пацани...", "$Гайз, ви чули...?": the others answer; a joke: they react to it
                     follow = threading.Thread(target=self.group_answer, daemon=True, args=(
                         state, strip_tags(line), npc.get("name")), kwargs={
-                        "exclude": npc.get("id"), "speaker_npc": npc, "after": started})
+                        "exclude": npc.get("id"), "speaker_npc": npc, "after": started,
+                        "kind": "story" if tells_joke(text) else "talk"})
                     follow.start()
                 self.gesture(npc, emote)
                 # PDA: under the NPC's name and portrait, "[nickname] what he says"
@@ -3357,16 +3463,19 @@ class Talker:
             self.busy.release()
             report("TWITCH_QUEUE", str(len(self.twitch_queue)))
 
-    def group_answer(self, state, said, speaker, from_player=False, exclude=None, speaker_npc=None, after=None):
+    def group_answer(self, state, said, speaker, from_player=False, exclude=None, speaker_npc=None, after=None,
+                     kind="talk"):
         """Someone spoke to everybody ("всі", "пацани", "сталкери"...): up to GROUP_MAX men around answer,
-        if it makes sense, in one AI request. Returns False when fewer than two men are around."""
+        if it makes sense, in one AI request. Returns False when fewer than two men are around.
+        kind="story": someone told a joke or a story and the men around react (one listener is enough)."""
         men = [n for n in state.get("npcs", []) if isinstance(n, dict) and n.get("id") != exclude
-               and n.get("dist", 99) < GROUP_DISTANCE and not n.get("wounded") and not is_monolith(n)]
+               and n.get("dist", 99) < GROUP_DISTANCE and not n.get("wounded") and not is_monolith(n)
+               and not n.get("in_combat")]
         men = men[:6]
-        if len(men) < 2:
+        if len(men) < (1 if kind == "story" else 2):
             return False
         keys = [self.npc_key(n, state) for n in men]
-        lines = self.brain.group(men, state, said, speaker, speaker_npc=speaker_npc,
+        lines = self.brain.group(men, state, said, speaker, speaker_npc=speaker_npc, kind=kind,
                                  remembers=[self.memory.remembers(k) for k in keys] if from_player else None)
         if after is not None:  # written while the line they react to plays: speak once it has started
             after.wait(30)
