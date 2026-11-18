@@ -86,3 +86,7 @@ Twitch підключається так:
 Видалити мод з гри: `uninstall_mod.ps1`.
 
 `.env`, логи, пам'ять NPC і токен Twitch в репозиторій не потрапляють. `.env` нікому не скидай.
+
+## Ліцензія
+
+MIT, див. [LICENSE](LICENSE). Виняток: 6 оригінальних скриптів гри в `mod\gamedata\scripts` (усі, крім `talker_bridge.script`) належать GSC Game World, тут вони лише з доданими хуками.

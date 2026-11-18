@@ -86,3 +86,7 @@ After changing anything in `mod\`, run `install_mod.ps1` and reload your save, s
 To remove the mod from the game, run `uninstall_mod.ps1`.
 
 `.env`, logs, NPC memory and the Twitch token stay out of the repo. Don't share your `.env`.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Except the 6 original game scripts in `mod\gamedata\scripts` (all but `talker_bridge.script`): they belong to GSC Game World and are included only with the hooks added.
