@@ -31,7 +31,7 @@ LORE = [
      "Бармен: owner of the bar «100 рентген» at Росток, neutral ground guarded by «Долг»; gives jobs, buys info, pours "
      "vodka. Everyone who went north passed through his bar."),
     (r"воронін\w*|воронин\w*", False,
-     "Генерал Воронін: leader of «Долг» (Обов'язок), headquarters at the Росток factory. Stern, values discipline; "
+     "Генерал Воронін: leader of «Долг» (his men: долгівці), headquarters at the Росток factory. Stern, values discipline; "
      "awards the order «Сєрєбряний щіт»."),
     (r"таченк\w*", False,
      "Генерал Таченко: legendary founder of «Долг». Recently a PDA turned up showing he abandoned his men, broke their "

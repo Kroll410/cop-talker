@@ -241,7 +241,7 @@ TWITCH_BLOCKED = [w.strip().lower() for w in os.environ.get("TWITCH_BLOCKED", ""
 
 LEVELS = {"zaton": "Затон", "jupiter": "Юпітер", "pripyat": "Прип'ять",
           "labx8": "лабораторія X8", "jupiter_underground": "шляхопровід «Прип'ять-1»"}
-COMMUNITIES = {"stalker": "вільний сталкер", "bandit": "бандит", "dolg": "«Обов'язок»",
+COMMUNITIES = {"stalker": "вільний сталкер", "bandit": "бандит", "dolg": "Долг (долгівець)",
                "freedom": "«Свобода»", "army": "військовий", "military": "військовий",
                "monolith": "«Моноліт»", "killer": "найманець", "ecolog": "науковець",
                "zombied": "зомбований", "trader": "торговець"}
@@ -332,6 +332,10 @@ FUN_RULES = {
            "almost every line, creative combos and comparisons, never the same word twice in a row.",
 }
 FUN_RULE = FUN_RULES.get(FUN_LEVEL, FUN_RULES["high"])
+# Duty is always "Долг" and its men "долгівці", never the dub's "Обов'язок" / "обов'язківці". It goes into every
+# prompt that writes spoken lines (they all include FUN_RULE), and fix_factions() repairs anything that slips through.
+FUN_RULE += ("\n- The Duty faction is called only Долг (Долгу, Долгом), its men only долгівець / долгівці (долгівця, "
+             "долгівців, долгівцям). Never \"Обов'язок\" or \"обов'язківці\" for them.")
 SYSTEM_PROMPT = SYSTEM_PROMPT.format(tags=AUDIO_TAGS_RULE if EXPRESSIVE else "", fun=FUN_RULE)
 MONOLITH_PROMPT = MONOLITH_PROMPT.format(tags=MONOLITH_TAGS_RULE if EXPRESSIVE else "")
 
@@ -395,6 +399,31 @@ def knows(npc, who):
     return npc.get("dist", 99) + who.get("dist", 99) <= EVENT_RADIUS
 
 
+EARSHOT = 12  # metres: a man this close to the talkers hears them (and his name)
+
+
+def in_earshot(npc, talkers):
+    """Is `npc` close enough to hear these men talk? By positions if the game sends them, else both near the
+    player and in the same place, else just near the player."""
+    for t in talkers:
+        if None not in (npc.get("x"), npc.get("z"), t.get("x"), t.get("z")):
+            if math.hypot(npc["x"] - t["x"], npc["z"] - t["z"]) > EARSHOT:
+                return False
+        elif t.get("place") and npc.get("place") and t.get("place") != npc.get("place"):
+            return False
+    return True
+
+
+def named_bystander(lines, bystanders, talkers=()):
+    """The first man around (not one of the talkers) whom the talk names, or None."""
+    ids = {t.get("id") for t in talkers}
+    for _, line in lines:
+        for n in bystanders:
+            if n.get("id") not in ids and mentions(n, strip_tags(line)):
+                return n
+    return None
+
+
 def event_subject(ev):
     """Who an event happened to, for deciding who knows about it."""
     return (ev.get("victim") if ev.get("type") == "death" else ev.get("npc")) or {}
@@ -440,6 +469,22 @@ PLURAL_YOU = re.compile(r"(?<!\w)(ви|вас|вам|вами)\s+(\w+\s+)?(чу�
 def to_everyone(text):
     """Said to the people around, not to one man: "пацани...", "гайз...", "ви чули...", "хто з вас..."."""
     return bool(text) and bool(GROUP_WORDS.search(text) or PLURAL_YOU.search(text))
+
+
+APOS = "['’ʼ`]"
+DUTY_MEN = re.compile(r"(?<![^\W\d_])(о)бов" + APOS + r"?язків(?=е?ц|ськ)", re.I)
+DUTY_NAME = re.compile(r"(?<![^\W\d_])(?:Обов" + APOS + r"?яз(ок|ку|ком|кові|ка)|(?<=«)обов" + APOS
+                       + r"?яз(ок|ку|ком|кові|ка))(?![^\W\d_])")
+DUTY_ENDINGS = {"ок": "", "ку": "у", "ком": "ом", "кові": "ові", "ка": "а"}
+
+
+def fix_factions(text):
+    """Duty is "Долг" and its men "долгівці", never "Обов'язок" / "обов'язківці". The plain word "обов'язок"
+    (a duty, an obligation) stays: only the capitalised name, a name in «», and the men's forms are changed."""
+    if not text:
+        return text
+    text = DUTY_MEN.sub(lambda m: ("Д" if m.group(1).isupper() else "д") + "олгів", text)
+    return DUTY_NAME.sub(lambda m: "Долг" + DUTY_ENDINGS[m.group(1) or m.group(2)], text)
 
 
 def npc_brief(n):
@@ -732,6 +777,13 @@ CHAT_SYSTEM = """You write tiny overheard conversations between two men in the Z
 CHAT_SYSTEM = CHAT_SYSTEM.format(fun=FUN_RULE, tags=(
     "\n- In at most one line you may put one English tag in square brackets for the voice: [laughs], [sighs], "
     "[chuckles], [coughs], [whispers]." if "v3" in os.environ.get("ELEVENLABS_MODEL", "eleven_v3") else ""))
+OVERHEARD_SYSTEM = """You write what happens in the Zone (S.T.A.L.K.E.R.: Call of Pripyat), in Ukrainian, when a man overhears two others talk about him by name: he speaks up to both of them, and they may answer back. Lines spoken out loud only.
+- Real men talking: fillers, today's slang and memes, a bit of surzhyk, swearing if his faction swears; no slurs about ethnicity, nationality, religion, sexuality or disability, unless a man's description explicitly allows street slurs. Never like an assistant.
+{fun}
+- Each man keeps his own character and way of speaking. Use only places and people given to you, plus Затон, Юпітер, Прип'ять, Скадовськ, Борода.
+- No stage directions, no quotes, no emoji, no words from other languages (only the English voice tags).{tags}""".format(fun=FUN_RULE, tags=(
+    "\n- You may put one English tag in square brackets for the voice: [laughs], [sighs], [chuckles], [coughs]."
+    if EXPRESSIVE else ""))
 GROUP_SYSTEM = """You write how several men in the Zone (S.T.A.L.K.E.R.: Call of Pripyat) react out loud, in Ukrainian, when someone speaks to all of them at once.
 - They answer the speaker, and may also react to each other. Only men who'd really say something answer; a short grunt or joke counts.
 - Real men talking: fillers, today's slang and memes, a bit of surzhyk, swearing if their faction swears; no slurs about ethnicity, nationality, religion, sexuality or disability, unless a man's description explicitly allows street slurs. Never like an assistant.
@@ -1914,9 +1966,71 @@ class Brain:
         system = "You compress a game character's memories into a short note."
         return self.ask_gemini(ask, system) if LLM_PROVIDER == "gemini" else self.ask_claude(ask, system)
 
-    def chat(self, a, b, state, events_text, recent=(), scene=None, memories=None):
+    def overheard(self, c, a, b, lines, state, remembers=""):
+        """C heard A and B talk about him by name. He reacts like a real man would, and they may answer back:
+        a laugh, a friendly jab, or (if they badmouthed him) a confrontation that can end in shooting.
+        Returns [(npc, line, emote, kills), ...], C first; kills = [target npc] he opens fire on."""
+        talk = "\n".join(f"{'A' if n is a else 'B'} ({n.get('name')}): {strip_tags(line)}" for n, line in lines)
+        where = place_name(c.get("place")) or LEVELS.get(state.get("level"), state.get("level"))
+        rel = lambda x, y: ("same faction" if x.get("community") == y.get("community") else
+                            f"{COMMUNITIES.get(x.get('community'), x.get('community'))} vs "
+                            f"{COMMUNITIES.get(y.get('community'), y.get('community'))}")
+        parts = [f"C: {npc_brief(c)}", f"A: {npc_brief(a)}", f"B: {npc_brief(b)}",
+                 f"Where: {where}, {weather_name(state.get('weather'))}. C and A: {rel(c, a)}; C and B: {rel(c, b)}.",
+                 f"A and B were just talking, and C, standing nearby, heard them mention him by name:\n{talk}"]
+        if remembers:
+            parts.append(f"C's memory (him = the player): {remembers}")
+        parts.append(
+            "Write what happens next, like a real simulation: C speaks first, to both of them, reacting to what "
+            "they actually said about him. Friendly or harmless talk: he jokes back, plays along, corrects them, "
+            "1-2 lines in total. Mocking, insulting, accusing him or spreading rumours: he confronts them; they "
+            "may apologise, laugh it off, double down or threaten back; 2-4 lines in total. Each line 3-20 words. "
+            "It may escalate to a gunfight ONLY if these men's characters really would (bandits and hotheads, "
+            "a serious insult, different factions at odds; same-faction stalkers almost never; scientists and "
+            "story characters never): then the line where a man draws ends with [ACTION: kill Name] (Name = the "
+            "man he shoots), and that is the last line. Most of the time it ends in words. "
+            "A line may end with [ACTION: emote X], X one of: " + ", ".join(EMOTES) + ". "
+            f"C is {c.get('name')}, A is {a.get('name')}, B is {b.get('name')}. Nobody says his own name. "
+            "Output lines like \"C: text\", \"A: text\", \"B: text\", nothing else.")
+        ask = "\n".join(parts)
+        men = {"C": c, "A": a, "B": b}
+        for attempt in range(2):
+            text = self.ask_gemini(ask, OVERHEARD_SYSTEM) if LLM_PROVIDER == "gemini" else \
+                self.ask_claude(ask, OVERHEARD_SYSTEM)
+            out, slurred = [], False
+            for raw in (text or "").splitlines():
+                m = re.match(r"\s*\**\s*([ABC])\s*\**\s*[:：-]\s*(.+)", raw)
+                if not m or not m.group(2).strip():
+                    continue
+                npc = men[m.group(1)]
+                said, _, extras = split_action(m.group(2))
+                line = drop_own_name(self.vary_tags(re.sub(r"[*\"«»]", "", said).strip()), npc)
+                if not strip_tags(line).strip():
+                    continue
+                if has_slur(line, npc):
+                    slurred = True
+                    break
+                kills = []
+                if not npc.get("story") and not npc.get("wounded") and npc.get("community") != "ecolog":
+                    for kind, arg in extras:
+                        target = next((x for x in (a, b, c) if x is not npc and mentions(x, arg)), None) \
+                            if kind == "kill" else None
+                        if target and not target.get("story"):
+                            kills.append(target)
+                out.append((npc, line, next((arg for kind, arg in extras if kind == "emote"), None), kills))
+                if kills:  # the shooting starts: nothing more is said
+                    break
+            if out and out[0][0] is not c:
+                out = []  # he must be the one who reacts first
+            if not slurred:
+                return out[:4]
+            ask += "\n\nThe last try used slurs that don't fit these men. Write it again without any."
+        return []
+
+    def chat(self, a, b, state, events_text, recent=(), scene=None, memories=None, nearby=()):
         """One request writes a whole short exchange between two NPCs: [(npc, line), ...].
-        scene: what is going on between them (for a set-up talk instead of idle chatter)."""
+        scene: what is going on between them (for a set-up talk instead of idle chatter).
+        nearby: other men within earshot; the talk may mention one of them, and he then answers."""
         who = npc_brief
         hours = state.get("hours", 12)
         when = "night" if hours < 5 or hours >= 22 else "evening" if hours >= 18 else "morning" if hours < 10 else "day"
@@ -1936,6 +2050,11 @@ class Brain:
             parts.append("A starts the talk, B reacts. What A has in mind (\"you\" = A): " + self.outside_topic())
         parts.append("Gestures: in about half of the talks, one line gets a gesture that fits it: put [ACTION: emote X] "
                      "at the end of that line, X one of: " + ", ".join(EMOTES) + ".")
+        if nearby:
+            parts.append("Also within earshot: " + "; ".join(
+                f"{n.get('name')} ({COMMUNITIES.get(n.get('community'), n.get('community'))})" for n in nearby[:4])
+                + ". Now and then (about one talk in three) they bring one of them up by name: gossip about him, "
+                  "a jab, call him over, ask what he thinks. He can hear it.")
         parts.append(f"A is {a.get('name')}, B is {b.get('name')}. Nobody says his own name; he may call the other one "
                      "by name.")
         parts.append(f"{scene}\nWrite their exchange." if scene else "Write their exchange.")
@@ -2636,6 +2755,7 @@ class Talker:
         """Voice + subtitle of one line, the subtitle appearing right as the voice starts.
         note: also keep the line in his memory, e.g. "(to Лоцман)" (talks with the player are kept elsewhere).
         aside: a quieter mutter that may play over someone else's line. on_start() runs when the voice starts."""
+        line, pda_text = fix_factions(line), fix_factions(pda_text)
         plain = strip_tags(line)
         self.spoken.append((time.time(), plain))
         try:  # a news story he just told won't be offered again (unless it's big news)
@@ -3297,17 +3417,54 @@ class Talker:
         if not self.busy.acquire(blocking=False):
             return
         try:
+            nearby = [n for n in state.get("npcs", []) if isinstance(n, dict) and n.get("id") not in
+                      (a.get("id"), b.get("id")) and n.get("relation") != "enemy" and not n.get("in_combat")
+                      and not n.get("wounded") and not is_monolith(n) and n.get("community") != "zombied"
+                      and in_earshot(n, (a, b))]
             lines = self.brain.chat(a, b, state, self.game.describe_events(a, b), self.recent_lines(),
-                                    memories=[self.memory.remembers(self.npc_key(n, state)) for n in (a, b)])
+                                    memories=[self.memory.remembers(self.npc_key(n, state)) for n in (a, b)],
+                                    nearby=nearby)
             if len(lines) < 2 or too_similar(strip_tags(lines[0][1]), self.recent_lines()):
                 return
             log(f"Chat: {a.get('name')} & {b.get('name')}")
+            # Someone around was named: he heard it and reacts, and they may answer back; if they badmouthed him it
+            # can turn into a quarrel or a shoot-out. All of it is written while their talk plays.
+            third, scene = named_bystander(lines, nearby, (a, b)), []
+            writer = None
+            if third:
+                def write():
+                    try:
+                        scene.extend(self.brain.overheard(
+                            third, a, b, lines, state, self.memory.remembers(self.npc_key(third, state))))
+                    except Exception as exc:
+                        log(f"overheard error: {exc!r}")
+                writer = threading.Thread(target=write, daemon=True)
+                writer.start()
             self.speak_lines(lines, state, notes=[f"(to {(b if npc is a else a).get('name')})" for npc, _ in lines],
                              gestures=list(self.brain.chat_emotes)[:len(lines)])
+            if writer:
+                writer.join(30)
+                if scene and not self.recording:
+                    self.play_overheard(third, a, b, scene, state)
         except Exception as exc:
             log(f"chat error: {exc!r}")
         finally:
             self.busy.release()
+
+    def play_overheard(self, third, a, b, scene, state):
+        """Play what happened after `third` heard his name: their words, then the shooting if someone drew."""
+        log(f"  {third.get('name')} heard his name:")
+        notes = [f"(to {a.get('name')} and {b.get('name')})" if npc is third else f"(to {third.get('name')})"
+                 for npc, *_ in scene]
+        self.speak_lines([(npc, line) for npc, line, *_ in scene], state, notes=notes,
+                         gestures=[emote for _, _, emote, _ in scene])
+        if self.recording:
+            return
+        for npc, _, _, kills in scene:
+            for target in kills:
+                self.game.send("act", npc["id"], f"kill:{target['id']}")
+                self.game.send("info", None, f"{npc.get('name')} стріляє в {target.get('name')}")
+                log(f"{npc.get('name')} -> KILL {target.get('name')} (overheard quarrel)")
 
     # ------------------------------------------------------------ Twitch: viewers speak through NPCs
     def on_twitch(self, user, text, redemption):
