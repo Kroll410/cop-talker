@@ -334,8 +334,13 @@ class Window(QMainWindow):
             return
         proc, self.proc = self.proc, None
         proc.finished.disconnect(self.on_finished)
-        proc.kill()
-        proc.waitForFinished(3000)
+        # Ask it to quit first: it finishes a Twitch sign-in renewal that's under way (a hard kill in the middle
+        # of one cost a new sign-in), then exits. Only if it doesn't, it's killed.
+        proc.write(b"quit\n")
+        if not proc.waitForFinished(5000):
+            proc.kill()
+            proc.waitForFinished(3000)
+        self.read_output_from(proc)
         self.state.setText("Stopped")
         self.state.setStyleSheet("")
         self.toggle.setText("Start")
@@ -356,11 +361,13 @@ class Window(QMainWindow):
         self.append(f"— helper exited with code {code} —")
 
     def read_output(self):
-        if not self.proc:
-            return
+        if self.proc:
+            self.read_output_from(self.proc)
+
+    def read_output_from(self, proc):
         # Output arrives in arbitrary chunks: keep the unfinished last line (and any half of a Ukrainian letter)
         # until the rest comes, so nothing is garbled and "@" status lines are never split.
-        self.out_buf = getattr(self, "out_buf", b"") + bytes(self.proc.readAllStandardOutput())
+        self.out_buf = getattr(self, "out_buf", b"") + bytes(proc.readAllStandardOutput())
         *done, self.out_buf = self.out_buf.split(b"\n")
         for raw in done:
             line = raw.decode("utf-8", "replace").rstrip("\r")

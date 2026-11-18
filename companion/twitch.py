@@ -5,6 +5,7 @@ Events come over EventSub WebSocket, so no public server or open port is needed.
 The token is kept in twitch_token.json next to .env; don't share that file.
 """
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -43,6 +44,7 @@ class Twitch:
         self.status = "off"
         self.stop = threading.Event()
         self.http = httpx.Client(timeout=15)
+        self.auth_lock = threading.Lock()  # held while a sign-in is renewed and saved
 
     # ------------------------------------------------------------ auth
     def load_token(self):
@@ -52,7 +54,10 @@ class Twitch:
             self.token = {}
 
     def save_token(self):
-        self.token_file.write_text(json.dumps(self.token), encoding="utf-8")
+        """Written in one go (temp file + rename): a helper killed mid-write never leaves a broken sign-in."""
+        tmp = self.token_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.token), encoding="utf-8")
+        os.replace(tmp, self.token_file)
 
     def device_login(self):
         r = self.http.post("https://id.twitch.tv/oauth2/device", data={"client_id": self.client_id, "scopes": self.scopes})
@@ -68,21 +73,32 @@ class Twitch:
                 "client_id": self.client_id, "scopes": self.scopes, "device_code": dev["device_code"],
                 "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
             if r.status_code == 200:
-                self.token = r.json()
-                self.save_token()
+                with self.auth_lock:
+                    self.token = r.json()
+                    self.save_token()
                 return True
             if "authorization_pending" not in r.text:
                 raise RuntimeError(f"Twitch sign-in failed: {r.text[:200]}")
         return False
 
     def refresh(self):
-        r = self.http.post("https://id.twitch.tv/oauth2/token", data={
-            "client_id": self.client_id, "grant_type": "refresh_token", "refresh_token": self.token["refresh_token"]})
-        if r.status_code != 200:
+        """Renew the sign-in. Twitch's refresh key works once, so the request and saving the new key happen
+        under auth_lock: the helper waits for it before quitting (a kill in between would cost a new sign-in)."""
+        with self.auth_lock:
+            used = self.token.get("refresh_token")
+            r = self.http.post("https://id.twitch.tv/oauth2/token", data={
+                "client_id": self.client_id, "grant_type": "refresh_token", "refresh_token": used})
+            if r.status_code == 200:
+                self.token = r.json()
+                self.save_token()
+                return True
+            # Refused: maybe another run already renewed it and saved the new key. Use that if so.
+            self.load_token()
+            if self.token.get("refresh_token") and self.token.get("refresh_token") != used:
+                self.log("Twitch: using the sign-in renewed by another run")
+                return True
+            self.log(f"Twitch: sign-in renewal refused ({r.status_code}), you'll need to sign in again")
             return False
-        self.token = r.json()
-        self.save_token()
-        return True
 
     def validate(self):
         if not self.token.get("access_token"):

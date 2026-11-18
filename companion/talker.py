@@ -2488,6 +2488,58 @@ class Talker:
         elif SUBTITLES in ("pda", "both"):
             self.game.send("you" if npc_id is None else "say", npc_id, text)
 
+    # ------------------------------------------------------------ one line right after another
+    # The voice player plays one line at a time, in order. A follow-up line is written and its voice fetched while
+    # the line before it is still playing, so it starts the moment that one ends (no pause for the AI and TTS).
+    def answer_after(self, after, npc, state, mode, extra=None, player_text="", note=None):
+        """Write `npc`'s reply now, in the background; speak it once the line before it (`after`) has started
+        playing. Returns the thread (join it before the conversation is over)."""
+        def run():
+            try:
+                line = self.brain.reply(npc, state, self.game.describe_events(npc), [], player_text, mode,
+                                        recent=self.recent_lines(), extra=extra,
+                                        remembers=self.memory.remembers(self.npc_key(npc, state)))
+                emote = next((a for k, a in self.brain.last_extras if k == "emote"), None)
+                if not line:
+                    return
+                if after is not None:
+                    after.wait(30)
+                if self.recording:  # the player started talking: let him
+                    return
+                log(f"  {npc.get('name')} answers: {line}")
+                self.speak(npc, line, state, note=note, on_start=lambda: self.gesture(npc, emote))
+            except Exception as exc:
+                log(f"answer error: {exc!r}")
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return thread
+
+    def speak_lines(self, lines, state, notes=None, gestures=None):
+        """Several lines in order (a chat, a confrontation): each line's voice is fetched while the one before it
+        plays. Stops early if the player starts talking."""
+        prev, threads = None, []
+        for i, (npc, line) in enumerate(lines):
+            started = threading.Event()
+
+            def go(npc=npc, line=line, started=started, prev=prev, i=i):
+                try:
+                    if prev is not None:
+                        prev.wait(30)
+                    if self.recording:  # you started talking: they stop
+                        return
+                    log(f"  {npc.get('name')}: {line}")
+                    emote = gestures[i] if gestures and i < len(gestures) else None
+                    self.speak(npc, line, state, note=notes[i] if notes else None,
+                               on_start=lambda: (self.gesture(npc, emote), started.set()))
+                finally:
+                    started.set()  # never leave the next line waiting
+
+            threads.append(threading.Thread(target=go, daemon=True))
+            threads[-1].start()
+            prev = started
+        for thread in threads:
+            thread.join(60)
+
     def gesture(self, npc, emote):
         """Start a gesture (game script v6+) together with the words; None does nothing."""
         if emote and npc and npc.get("id") is not None and not npc.get("wounded"):
@@ -2696,7 +2748,13 @@ class Talker:
         for kind, arg in extras:  # gestures start together with the words
             if kind == "emote":
                 self.game.send("act", npc["id"], f"emote:{arg}")
-        self.speak(npc, reply, state, note=None if (player_text or mode == "greet") else "(on your own)")
+        # A bystander may butt in: his line is written while this one plays, and follows it at once.
+        started, butt_in = threading.Event(), None
+        if mode == "reply" and action not in ("warn", "hostile") and random.random() < CHIME_CHANCE:
+            butt_in = self.chime_in(npc, state, player_text, plain, after=started)
+        self.speak(npc, reply, state, note=None if (player_text or mode == "greet") else "(on your own)",
+                   on_start=started.set)
+        started.set()
         self.do_deals(npc, state, extras, key, player_text)
         current = {"enemy": "hostile", "friend": "friend"}.get(npc.get("relation"), "calm")
         redundant = action == current or (action == "follow" and npc.get("following")) or \
@@ -2717,8 +2775,8 @@ class Talker:
                                                       "stay": "(ти перестав іти за ним)"}[action])
         if action in ("warn", "hostile") and mode == "reply":
             self.squad_backup(npc, state, plain, action)
-        elif mode == "reply" and random.random() < CHIME_CHANCE:
-            self.chime_in(npc, state, player_text, plain)
+        if butt_in:
+            butt_in.join(60)
         return reply, action
 
     def do_deals(self, npc, state, extras, key, player_text):
@@ -2824,26 +2882,23 @@ class Talker:
         except Exception as exc:
             log(f"confront error: {exc!r}")
             return
-        for (npc, line), emote in zip(lines[:3], self.brain.chat_emotes):
-            log(f"  {npc.get('name')}: {line}")
-            self.gesture(npc, emote)
-            self.speak(npc, line, state, note="(before the paid hit)")
-            time.sleep(0.2)
+        lines = lines[:3]
+        self.speak_lines(lines, state, notes=["(before the paid hit)"] * len(lines),
+                         gestures=list(self.brain.chat_emotes)[:len(lines)])
 
-    def chime_in(self, npc, state, player_text, line):
-        """Sometimes one bystander butts into the conversation. Only once: his line never triggers another."""
+    def chime_in(self, npc, state, player_text, line, after=None):
+        """Sometimes one bystander butts into the conversation. Only once: his line never triggers another.
+        His line is written right away and spoken after `after` (the line he reacts to) has started playing.
+        Returns the thread, or None if nobody is there."""
         others = [n for n in state.get("npcs", []) if isinstance(n, dict) and n.get("id") != npc.get("id")
                   and n.get("dist", 99) < 8 and n.get("relation") != "enemy" and not n.get("wounded")
                   and not n.get("in_combat") and not is_monolith(n)]
         if not others:
-            return
+            return None
         other = others[0]
         extra = {"name": npc.get("name"), "player": player_text, "line": line}
-        reply = self.brain.reply(other, state, self.game.describe_events(other), [], "", "chime",
-                                 recent=self.recent_lines(), extra=extra)
-        if reply:
-            log(f"  {other.get('name')} (joins in): {reply}")
-            self.speak(other, reply, state, note=f"(butting in on the player and {npc.get('name')})")
+        return self.answer_after(after, other, state, "chime", extra=extra,
+                                 note=f"(butting in on the player and {npc.get('name')})")
 
     def squad_backup(self, leader, state, line, action):
         """Squad mates standing nearby back their man up; if he turns hostile, so do they."""
@@ -3143,14 +3198,8 @@ class Talker:
             if len(lines) < 2 or too_similar(strip_tags(lines[0][1]), self.recent_lines()):
                 return
             log(f"Chat: {a.get('name')} & {b.get('name')}")
-            for (npc, line), emote in zip(lines, self.brain.chat_emotes):
-                if self.recording:  # you started talking: they stop
-                    break
-                other = b if npc is a else a
-                log(f"  {npc.get('name')}: {line}")
-                self.gesture(npc, emote)
-                self.speak(npc, line, state, note=f"(to {other.get('name')})")
-                time.sleep(0.3)
+            self.speak_lines(lines, state, notes=[f"(to {(b if npc is a else a).get('name')})" for npc, _ in lines],
+                             gestures=list(self.brain.chat_emotes)[:len(lines)])
         except Exception as exc:
             log(f"chat error: {exc!r}")
         finally:
@@ -3281,23 +3330,24 @@ class Talker:
                         line = retold
                         emote = next((arg for kind, arg in self.brain.last_extras if kind == "emote"), None)
                 log(f"Twitch ({user}) via {npc.get('name')}: {line}")
+                # Whoever answers him is written NOW, while his line plays, and speaks the moment it ends.
+                started, follow = threading.Event(), None
+                if named:  # the stalker he talked about answers him
+                    follow = self.answer_after(started, named, state, "addressed",
+                                               extra={"name": npc.get("name"), "line": strip_tags(line)},
+                                               note=f"(to {npc.get('name')})")
+                elif to_everyone(text) or "?" in text:  # "$Пацани...", "$Гайз, ви чули...?": the others answer
+                    follow = threading.Thread(target=self.group_answer, daemon=True, args=(
+                        state, strip_tags(line), npc.get("name")), kwargs={
+                        "exclude": npc.get("id"), "speaker_npc": npc, "after": started})
+                    follow.start()
                 self.gesture(npc, emote)
                 # PDA: under the NPC's name and portrait, "[nickname] what he says"
                 self.speak(npc, line, state, pda_text=f"[{user}] {strip_tags(line)}" if TWITCH_SHOW_NAME else None,
-                           note=f"(voicing Twitch viewer {user})")
-                if named:  # the stalker he talked about answers him
-                    time.sleep(0.4)
-                    reply = self.brain.reply(named, state, "", [], "", "addressed",
-                                             extra={"name": npc.get("name"), "line": strip_tags(line)},
-                                             remembers=self.memory.remembers(self.npc_key(named, state)))
-                    if reply:
-                        log(f"  {named.get('name')} answers: {reply}")
-                        self.brain_gesture(named)
-                        self.speak(named, reply, state, note=f"(to {npc.get('name')})")
-                elif to_everyone(text) or "?" in text:  # "$Пацани...", "$Гайз, ви чули...?": the others answer
-                    time.sleep(0.4)
-                    self.group_answer(state, strip_tags(line), npc.get("name"), exclude=npc.get("id"),
-                                      speaker_npc=npc)
+                           note=f"(voicing Twitch viewer {user})", on_start=started.set)
+                started.set()
+                if follow:
+                    follow.join(90)
             if self.twitch:
                 self.twitch.finish(redemption, spoken=True)
         except Exception as exc:
@@ -3307,7 +3357,7 @@ class Talker:
             self.busy.release()
             report("TWITCH_QUEUE", str(len(self.twitch_queue)))
 
-    def group_answer(self, state, said, speaker, from_player=False, exclude=None, speaker_npc=None):
+    def group_answer(self, state, said, speaker, from_player=False, exclude=None, speaker_npc=None, after=None):
         """Someone spoke to everybody ("всі", "пацани", "сталкери"...): up to GROUP_MAX men around answer,
         if it makes sense, in one AI request. Returns False when fewer than two men are around."""
         men = [n for n in state.get("npcs", []) if isinstance(n, dict) and n.get("id") != exclude
@@ -3318,6 +3368,8 @@ class Talker:
         keys = [self.npc_key(n, state) for n in men]
         lines = self.brain.group(men, state, said, speaker, speaker_npc=speaker_npc,
                                  remembers=[self.memory.remembers(k) for k in keys] if from_player else None)
+        if after is not None:  # written while the line they react to plays: speak once it has started
+            after.wait(30)
         answers = [(n, l, a) for n, l, a, aside in lines if not aside]
         asides = [(n, l) for n, l, a, aside in lines if aside]
         log(f"Group ({len(men)} around): {len(answers)} answer" + (f", {len(asides)} mutter" if asides else ""))
@@ -3425,7 +3477,26 @@ class Talker:
             self.ptt_up.set()      # stop a recording that was in progress
         return running
 
+    def watch_for_quit(self):
+        """The window asks the helper to quit by writing "quit" to it. Before exiting, let a Twitch sign-in
+        renewal that's under way finish and be saved (killed in between, it would cost a new sign-in)."""
+        def watch():
+            try:
+                for line in sys.stdin:
+                    if line.strip() == "quit":
+                        break
+                else:
+                    return  # no window attached (console run): Ctrl+C as usual
+            except (OSError, ValueError):
+                return
+            if self.twitch and self.twitch.auth_lock.acquire(timeout=5):
+                self.twitch.auth_lock.release()
+            log("— helper quitting —")
+            os._exit(0)
+        threading.Thread(target=watch, daemon=True).start()
+
     def run(self):
+        self.watch_for_quit()
         log(f"Ready. Hold [{PTT_KEY.upper()}] near an NPC and speak. Ctrl+C to quit.")
         USAGE.refresh_quota(self.voice.client)
         report("USAGE", USAGE.summary())
