@@ -2551,9 +2551,8 @@ class Talker:
                 if CHAT_ONLY:  # nobody listens to the mic in chat-only mode
                     self.game.send("status", None, "")
                     self.game.send("info", None, "Режим чату: сталкери говорять лише повідомлення з Twitch")
-                elif self.busy.locked() and not self.recording:
-                    self.game.send("info", None, "Зачекайте, ще говорять")
                 elif not self.recording:
+                    # even while someone talks: he's recorded now and answered right after (on_push_to_talk)
                     threading.Thread(target=self.on_push_to_talk, daemon=True).start()
             elif what == "ptt_up":
                 self.ptt_up.set()

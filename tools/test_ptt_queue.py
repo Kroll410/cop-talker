@@ -39,3 +39,18 @@ for what, at in events:
 names = [e[0] for e in events]
 ok = names.index("recorded") < names.index("NPC ends") and names.index("answer to: Лоцман, ти де був?") > names.index("NPC ends")
 print("OK: recorded during his line, answered after it" if ok else "FAIL")
+
+# --- the in-game T key (keys.txt "ptt_down") while an NPC talks: also recorded and queued, not refused
+events.clear()
+t.ptt_up = threading.Event()
+t.game_ptt = True
+started = []
+t.game.new_keys = lambda: ["ptt_down"]
+real_thread = threading.Thread
+talker.threading.Thread = lambda target, daemon=None, **k: type("T", (), {"start": lambda self: started.append(target)})()
+held = threading.Lock()
+held.acquire()
+t.busy = held  # somebody is talking right now
+t.handle_keys()
+talker.threading.Thread = real_thread
+print("in-game T while an NPC talks -> recording starts:", bool(started) and started[0] == t.on_push_to_talk)
