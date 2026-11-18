@@ -1,5 +1,7 @@
 # cop-talker
 
+![](docs/strilecky.jpg)
+
 English version: [README.en.md](README.en.md)
 
 ## Що треба

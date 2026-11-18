@@ -1,5 +1,7 @@
 # cop-talker
 
+![](docs/strilecky.jpg)
+
 Українською: [README.md](README.md)
 
 ## Requirements
