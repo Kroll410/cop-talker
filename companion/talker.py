@@ -315,6 +315,13 @@ def mentions(npc, text):
 
 GROUP_MAX = int(os.environ.get("GROUP_MAX", "3"))              # at most this many answer "всі/пацани/..."
 GROUP_DISTANCE = float(os.environ.get("GROUP_DISTANCE", "15"))
+# lead = one man answers (the squad leader if he's there) and others only mutter around it, quieter;
+# all = several men answer in turn, like before
+GROUP_STYLE = os.environ.get("GROUP_STYLE", "lead").strip().lower()
+GROUP_ASIDES = int(os.environ.get("GROUP_ASIDES", "2"))                   # most mutters around the answer
+GROUP_ASIDE_VOLUME = float(os.environ.get("GROUP_ASIDE_VOLUME", "0.45"))  # their volume next to the answer
+QUESTION_WORDS = re.compile(r"\?|(?<!\w)(хто|що|шо|де|куди|звідки|коли|чому|чого|навіщо|як|скільки|який|яка|яке|які|"
+                            r"чий|чия|чиє|чи|хтось|є\s+хто)(?!\w)", re.I)
 GROUP_WORDS = re.compile(r"\b(всі|всім|всіх|усі|усім|усіх|пацани|пацанів|пацанам|пацанчики|хлопці|хлопців|хлопцям|"
                          r"сталкери|сталкерам|сталкерів|народ|народе|братва|братво|мужики|мужиків|мужикам|бродяги|"
                          r"бродягам|братці|братани|братишки|друзі|панове|люди|кожен|кожному|хто-небудь|хтось)\b", re.I)
@@ -1107,7 +1114,7 @@ class Brain:
         self.last_action, self.last_extras = None, []
         feeds = "" if NEWS_FEEDS.lower() in ("off", "0", "none", "") else \
             DEFAULT_FEEDS if NEWS_FEEDS.lower() == "default" else NEWS_FEEDS
-        self.news = News(feeds, NEWS_REFRESH, log)
+        self.news = News(feeds, NEWS_REFRESH, log, seen_file=ROOT / "news_seen.json")
         log(f"NPC replies by {LLM_PROVIDER} ({GEMINI_MODEL if LLM_PROVIDER == 'gemini' else CLAUDE_MODEL})")
 
     def outside_topic(self):
@@ -1603,10 +1610,26 @@ class Brain:
         if speaker_npc:
             parts.append(f"The speaker is {npc_brief(speaker_npc)}"
                          + (" A known man: untouchable." if speaker_npc.get("story") else ""))
+        places = PLACES.get(state.get("level"), [])
+        parts.append("Names: only people and places given here"
+                     + (f" ({', '.join(places)})" if places else "")
+                     + ", plus Затон, Юпітер, Прип'ять, ЧАЕС, Велика Земля; Борода runs the Скадовськ bar and trades. "
+                       "Unsure? Say it vaguely, never invent a name.")
         parts.append(f"{speaker} says to all of them: «{said}»")
-        parts.append(f"Who answers, and what? Like a real group: answer only if it makes sense; 1 to {GROUP_MAX} of "
-                     "them, usually not everyone; later ones may react to earlier ones (agree, argue, joke). "
-                     "Each line 2-25 words. Output lines like \"2: text\" with the man's number, nothing else.")
+        lead = self.group_lead(men) if GROUP_STYLE == "lead" else None
+        if lead is not None:
+            asked = bool(QUESTION_WORDS.search(said or ""))
+            parts.append(
+                f"Man {lead + 1} speaks for the group: he {'answers the question' if asked else 'answers'} "
+                "(2-25 words). Output it as \"" + str(lead + 1) + ": text\". "
+                f"Then up to {GROUP_ASIDES} of the others may add an aside under their breath, at the same time: a "
+                "short mutter to a neighbour, a grunt, a joke about the speaker or the answer, a complaint, something "
+                "of their own (2-10 words). Asides never answer the question and don't repeat the answer. Output each "
+                "as \"N~: text\". Only men who'd really mutter something; often just one or none. Nothing else.")
+        else:
+            parts.append(f"Who answers, and what? Like a real group: answer only if it makes sense; 1 to {GROUP_MAX} "
+                         "of them, usually not everyone; later ones may react to earlier ones (agree, argue, joke). "
+                         "Each line 2-25 words. Output lines like \"2: text\" with the man's number, nothing else.")
         parts.append("Deeds, not just words: if a man would really act on it (he is offered money to shoot someone and "
                      "the price or the joke is worth it to him, he is challenged or provoked), end his line with "
                      "[ACTION: kill Name] to open fire on that man in sight (the speaker too, if he asked for it), "
@@ -1617,18 +1640,40 @@ class Brain:
             self.ask_claude("\n".join(parts), system)
         out = []
         for raw in (text or "").splitlines():
-            m = re.match(r"\s*\**\s*(\d+)\s*\**\s*[:.)-]\s*(.+)", raw)
-            if m and 1 <= int(m.group(1)) <= len(men) and m.group(2).strip():
-                npc = men[int(m.group(1)) - 1]
-                line, action, extras = split_action(m.group(2))
+            m = re.match(r"\s*\**\s*(\d+)\s*(~?)\s*\**\s*[:.)-]\s*(.+)", raw)
+            if m and 1 <= int(m.group(1)) <= len(men) and m.group(3).strip():
+                index = int(m.group(1)) - 1
+                npc = men[index]
+                # in lead mode only the lead answers; anyone else is an aside, whatever the model marked
+                aside = lead is not None and (bool(m.group(2)) or index != lead)
+                if aside and index == lead:
+                    continue  # the man who answers doesn't also mutter under his own answer
+                line, action, extras = split_action(m.group(3))
                 line = self.vary_tags(re.sub(r"[*\"«»]", "", line).strip())
+                if aside:  # said under his breath: one short sentence
+                    line = (re.match(r"[^.!?…]*[.!?…]+", line) or re.match(r".*", line)).group(0).strip()
                 if has_slur(line, npc) or not line:
                     continue
-                acts = [] if npc.get("story") or npc.get("wounded") else (
+                acts = [] if aside or npc.get("story") or npc.get("wounded") else (
                     ([("hostile", None)] if action == "hostile" else [])
                     + [(k, a) for k, a in extras if k == "kill"])
-                out.append((npc, line, acts))
+                out.append((npc, line, acts, aside))
+        if lead is not None:
+            answers = [o for o in out if not o[3]][:1]
+            return answers + [o for o in out if o[3]][:GROUP_ASIDES]
         return out[:GROUP_MAX]
+
+    @staticmethod
+    def group_lead(men):
+        """Who speaks for the group: the squad leader if one is here, else the most senior man, else the nearest."""
+        def score(i):
+            n = men[i]
+            try:
+                rank = float(n.get("rank") or 0)
+            except (TypeError, ValueError):
+                rank = 0
+            return (bool(n.get("leader")), rank, -float(n.get("dist", 99)))
+        return max(range(len(men)), key=score)
 
     def ask_claude(self, situation, system=SYSTEM_PROMPT):
         if LLM_PROVIDER != "claude-api":
@@ -1724,8 +1769,10 @@ class Voice:
                 return os.environ[name]
         return next((v for v in VOICE_IDS.values() if v and v not in self.dead), "")
 
-    def say(self, npc, text, save_to=None, current_dist=None, on_start=None):
-        """Speak a line. on_start() runs once, right when the sound starts (subtitles go up then)."""
+    def say(self, npc, text, save_to=None, current_dist=None, on_start=None, volume=1.0, overlap=False):
+        """Speak a line. on_start() runs once, right when the sound starts (subtitles go up then).
+        volume scales his loudness; overlap plays it over whatever is already playing (mutters in a group)."""
+        play_lock = threading.Lock() if overlap else self.lock
         started = {"done": False}
 
         def start():
@@ -1744,7 +1791,7 @@ class Voice:
             """The voice was deleted in ElevenLabs: forget it and say the line with the next fitting voice."""
             if getattr(exc, "status_code", None) == 404 and "voice" in str(getattr(exc, "body", "")).lower():
                 self.mark_dead(voice_id)
-                self.say(npc, original, save_to, current_dist, start)
+                self.say(npc, original, save_to, current_dist, start, volume, overlap)
                 return True
             return False
         from elevenlabs.types import VoiceSettings
@@ -1782,9 +1829,9 @@ class Voice:
             threading.Thread(target=feed, daemon=True).start()
             source.ready.wait(20)
             if source.has_audio():
-                with self.lock:
+                with play_lock:
                     start()
-                    self.play_spatial(source, npc, current_dist)
+                    self.play_spatial(source, npc, current_dist, volume)
                 return
             if other_voice(source.error):
                 return
@@ -1808,21 +1855,21 @@ class Voice:
         source = PcmSource()
         source.feed(pcm)
         source.close()
-        with self.lock:
+        with play_lock:
             start()
-            self.play_spatial(source, npc, current_dist)
+            self.play_spatial(source, npc, current_dist, volume)
 
-    def play_spatial(self, source, npc, current_dist):
+    def play_spatial(self, source, npc, current_dist, volume=1.0):
         """Play as the audio arrives, with volume that follows the live distance: walk away mid-sentence
         and he gets quieter."""
-        gain = {"now": distance_volume(npc.get("dist", 3)), "target": None}
+        gain = {"now": distance_volume(npc.get("dist", 3)) * volume, "target": None}
         done = threading.Event()
 
         def track_distance():
             while not done.is_set():
                 dist = current_dist() if current_dist else None
                 if dist is not None:
-                    gain["target"] = distance_volume(dist)
+                    gain["target"] = distance_volume(dist) * volume
                 done.wait(0.25)
 
         def callback(outdata, frames, _time, _status):
@@ -2115,11 +2162,18 @@ class Talker:
         """The gesture the AI put in the line it just wrote for this NPC, if any."""
         self.gesture(npc, next((arg for kind, arg in self.brain.last_extras if kind == "emote"), None))
 
-    def speak(self, npc, line, state=None, pda_text=None, note=None):
+    def speak(self, npc, line, state=None, pda_text=None, note=None, aside=False, on_start=None):
         """Voice + subtitle of one line, the subtitle appearing right as the voice starts.
-        note: also keep the line in his memory, e.g. "(to Лоцман)" (talks with the player are kept elsewhere)."""
+        note: also keep the line in his memory, e.g. "(to Лоцман)" (talks with the player are kept elsewhere).
+        aside: a quieter mutter that may play over someone else's line. on_start() runs when the voice starts."""
         plain = strip_tags(line)
         self.spoken.append((time.time(), plain))
+        try:  # a news story he just told won't be offered again (unless it's big news)
+            told = self.brain.news.mark_mentioned(plain)
+            if told:
+                log(f"  (news told: {told[0][:60]})")
+        except Exception as exc:
+            log(f"news memory: {exc!r}")
         if note is not None:
             try:
                 self.memory.said(self.npc_key(npc, state or self.game.state() or {}), plain, note)
@@ -2127,12 +2181,19 @@ class Talker:
                 log(f"memory: {exc!r}")
 
         def started():
-            self.show_line(npc["id"], plain, pda_text)
+            if aside:  # a mutter: PDA only, so the bottom line keeps the real answer
+                self.game.send("status", None, "")
+                self.game.send("say", npc["id"], plain)
+            else:
+                self.show_line(npc["id"], plain, pda_text)
             # his mouth moves in the game for about as long as the voice talks (Ukrainian at this speed ~13 chars/s)
             seconds = len(plain) / (13.0 * TTS_SPEED / 0.85)
             self.game.send("act", npc["id"], f"mouth:{seconds:.1f}")
+            if on_start:
+                on_start()
 
-        self.voice.say(npc, line, current_dist=lambda: self.game.distance_to(npc["id"]), on_start=started)
+        self.voice.say(npc, line, current_dist=lambda: self.game.distance_to(npc["id"]), on_start=started,
+                       volume=GROUP_ASIDE_VOLUME if aside else 1.0, overlap=aside)
         report("USAGE", USAGE.summary())
         return plain
 
@@ -2846,14 +2907,35 @@ class Talker:
         keys = [self.npc_key(n, state) for n in men]
         lines = self.brain.group(men, state, said, speaker, speaker_npc=speaker_npc,
                                  remembers=[self.memory.remembers(k) for k in keys] if from_player else None)
-        log(f"Group ({len(men)} around): {len(lines)} answer")
+        answers = [(n, l, a) for n, l, a, aside in lines if not aside]
+        asides = [(n, l) for n, l, a, aside in lines if aside]
+        log(f"Group ({len(men)} around): {len(answers)} answer" + (f", {len(asides)} mutter" if asides else ""))
         everyone = [n for n in state.get("npcs", []) if isinstance(n, dict)]
         hired = False
-        for npc, line, acts in lines:
+        # Mutters go under the answer: they start a moment after it, quieter, without waiting for it to end.
+        answer_started = threading.Event()
+        if not answers:
+            answer_started.set()
+        lead_name = answers[0][0].get("name") if answers else speaker
+        mutters = []
+        for i, (npc, line) in enumerate(asides):
+            def mutter(npc=npc, line=line, delay=random.uniform(1.0, 2.2) + i * 1.6):
+                answer_started.wait(30)
+                time.sleep(delay)
+                if self.recording:
+                    return
+                log(f"  ({npc.get('name')}, under his breath): {line}")
+                self.speak(npc, line, state, aside=True, note=f"(muttering while {lead_name} answered)")
+            mutters.append(threading.Thread(target=mutter, daemon=True))
+        for t in mutters:
+            t.start()
+        for npc, line, acts in answers:
             if self.recording:
                 break
             log(f"  {npc.get('name')}: {line}")
-            self.speak(npc, line, state, note=None if from_player else f"(to everyone, after {speaker})")
+            self.speak(npc, line, state, note=None if from_player else f"(to everyone, after {speaker})",
+                       on_start=answer_started.set)
+            answer_started.set()
             if from_player:
                 self.memory.add(self.npc_key(npc, state), said, strip_tags(line))
             for kind, arg in acts:  # words first, then the shooting
@@ -2885,6 +2967,8 @@ class Talker:
                         self.game.send("info", None, f"{npc.get('name')} стріляє в {target.get('name')}")
                         log(f"{npc.get('name')} -> KILL {target.get('name')} (group)")
             time.sleep(0.25)
+        for t in mutters:  # the group is done when the last mutter is
+            t.join(40)
         return True
 
     def check_healed(self, state):
