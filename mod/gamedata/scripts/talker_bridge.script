@@ -5,7 +5,7 @@
 --   inbox.txt    - written by the companion: "say|<npc_id>|<text>" lines; read and deleted here
 -- Every entry point is called through pcall from the hooks, so a bug here never crashes the game.
 
-MOD_VERSION = 11  -- the companion app checks this, so a game still running an old copy of this script is noticed
+MOD_VERSION = 12  -- the companion app checks this, so a game still running an old copy of this script is noticed
 local dir = nil
 local next_state_write = 0
 local next_inbox_check = 0
@@ -950,9 +950,41 @@ local function event_once(kind, ms, ev)
 	append_event(ev)
 end
 
+-- The player's death: who killed him (the last man who hit him), and which enemies stand around to gloat.
+local last_hitter = nil   -- { id = npc id, at = ms }
+local death_reported = false
+
+local function report_actor_death()
+	if death_reported or not db.actor then return end
+	if db.actor.health > 0 and db.actor:alive() then return end
+	death_reported = true
+	local killer = nil
+	if last_hitter and time_global() - last_hitter.at < 15000 then
+		local obj = level.object_by_id(last_hitter.id)
+		if obj and obj:alive() and is_stalker(obj) then killer = npc_info(obj) end
+	end
+	local enemies = { __array = true }
+	local apos = db.actor:position()
+	for id in pairs(db.storage) do
+		local obj = level.object_by_id(id)
+		if is_stalker(obj) and obj:alive() and (not killer or id ~= killer.id)
+				and obj:relation(db.actor) == game_object.enemy and obj:position():distance_to(apos) < 40 then
+			table.insert(enemies, npc_info(obj))
+			if #enemies >= 3 then break end
+		end
+	end
+	append_event({ type = "actor_death", killer = killer, enemies = enemies })
+end
+
 local function on_actor_hit(obj, amount, dir, who)
 	if not who or not amount or amount < 0.02 or who:id() == db.actor:id() then return end
-	if IsStalker(who) or IsMonster(who) then return end
+	if IsStalker(who) then
+		last_hitter = { id = who:id(), at = time_global() }
+		local ok, err = pcall(report_actor_death)  -- this shot may have been the last one
+		if not ok then log_error("death: " .. tostring(err)) end
+		return
+	end
+	if IsMonster(who) then return end
 	event_once("anomaly_hit", 15000, { kind = who:section() })  -- burnt, shocked... by an anomaly
 end
 
@@ -961,6 +993,7 @@ local function register_keys()
 	if keys_owner == db.actor then return end
 	keys_owner = db.actor
 	talking = false
+	death_reported, last_hitter = false, nil  -- a new life after a load
 	os.remove(path("events.jsonl"))  -- old events mean nothing after a load (the app restarts from 0)
 	load_keys()
 	db.actor:set_callback(callback.key_press, function(key) safe(on_key_press, key) end)
@@ -1019,6 +1052,10 @@ function update(delta)
 	local now = time_global()
 	if talking and now - talk_since > 30000 then on_key_release(keys.talk) end  -- release never came
 	if status_until > 0 and now > status_until then set_status(nil) end
+	if not death_reported and (db.actor.health <= 0 or not db.actor:alive()) then
+		local ok, err = pcall(report_actor_death)
+		if not ok then log_error("death: " .. tostring(err)) end
+	end
 	if sub_until > 0 and now > sub_until then sub_until = 0; pcall(set_static, SUB_SLOT, nil) end
 	if now >= next_link_check and (next(twitch_links) or link_shown ~= nil) then
 		next_link_check = now + 150
