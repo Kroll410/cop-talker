@@ -110,7 +110,7 @@ class SettingsTab(QWidget):
                 title.setFont(QFont(title.font().family(), 11, QFont.Bold))
                 self.form.addRow(title)
                 hint = []
-            elif "=" in s:
+            elif "=" in s and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", s.split("=", 1)[0].strip()):
                 key, value = s.split("=", 1)
                 key, value = key.strip(), value.strip()
                 text = " ".join(hint)

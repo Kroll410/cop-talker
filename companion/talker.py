@@ -36,16 +36,29 @@ MEMORY_FILE = ROOT / "memory.json"
 
 def load_env():
     # settings.ini: everyday options (the app's Settings tab edits it); .env: keys and voice IDs.
+    # A line without its own "NAME=" continues the setting above it (a long PLAYER_BIO over several lines);
+    # anything else odd is skipped with a warning, never fatal.
     for name in ("settings.ini", ".env"):
         env_file = ROOT / name
         if not env_file.exists():
             continue
-        for line in env_file.read_text(encoding="utf-8-sig").splitlines():
-            line = line.split(" #")[0].strip() if name == "settings.ini" else line.strip()
-            if line and not line.startswith(("#", ";", "[")) and "=" in line:
-                key, value = line.split("=", 1)
-                if value.strip():
-                    os.environ.setdefault(key.strip(), value.strip())
+        values, last = {}, None
+        for number, raw in enumerate(env_file.read_text(encoding="utf-8-sig").splitlines(), 1):
+            line = raw.split(" #")[0].strip() if name == "settings.ini" else raw.strip()
+            if not line or line.startswith(("#", ";", "[")):
+                last = None if line.startswith("[") else last
+                continue
+            key, sep, value = line.partition("=")
+            if sep and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key.strip()):
+                last = key.strip()
+                values[last] = value.strip()
+            elif last:  # the next line of the setting above
+                values[last] = (values[last] + " " + line.lstrip("= ").strip()).strip()
+            else:
+                print(f"{name}, line {number} skipped (not «NAME=value»): {raw.strip()[:60]}", file=sys.stderr)
+        for key, value in values.items():
+            if value:
+                os.environ.setdefault(key, value)
 
 
 load_env()
