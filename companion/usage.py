@@ -39,15 +39,20 @@ class Usage:
             self.save()
 
     def refresh_quota(self, client):
-        """Ask ElevenLabs how much of the monthly quota is used (at most every 10 minutes)."""
+        """Ask ElevenLabs how much of the monthly quota is used (at most every 10 minutes).
+        Runs in the background: their API sometimes takes minutes to answer, and nothing else may wait for it."""
         if not client or time.time() < self.next_quota_check:
             return
         self.next_quota_check = time.time() + 600
-        try:
-            sub = client.user.subscription.get()
-            self.quota = (sub.character_count, sub.character_limit)
-        except Exception:
-            pass
+
+        def ask():
+            try:
+                sub = client.user.subscription.get(request_options={"timeout_in_seconds": 20})
+                self.quota = (sub.character_count, sub.character_limit)
+            except Exception:
+                pass
+
+        threading.Thread(target=ask, daemon=True).start()
 
     def summary(self):
         with self.lock:
