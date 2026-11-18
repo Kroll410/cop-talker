@@ -5,7 +5,7 @@
 --   inbox.txt    - written by the companion: "say|<npc_id>|<text>" lines; read and deleted here
 -- Every entry point is called through pcall from the hooks, so a bug here never crashes the game.
 
-MOD_VERSION = 10  -- the companion app checks this, so a game still running an old copy of this script is noticed
+MOD_VERSION = 11  -- the companion app checks this, so a game still running an old copy of this script is noticed
 local dir = nil
 local next_state_write = 0
 local next_inbox_check = 0
@@ -82,6 +82,8 @@ local function npc_info(npc)
 		rank = npc:character_rank(), story_name = npc:name(), alive = npc:alive(),
 		health = npc.health, relation = relation_name(npc), weapon = weapon_of(npc),
 		dist = npc:position():distance_to(db.actor:position()) }
+	local pos = npc:position()  -- rough map position: who could have seen what happened (whole metres)
+	info.x, info.z = math.floor(pos.x + 0.5), math.floor(pos.z + 0.5)
 	local ok, prefix = pcall(function() return npc:sound_prefix() end)
 	if ok then info.voice = prefix end
 	local enemy = npc:best_enemy()

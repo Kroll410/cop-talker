@@ -10,6 +10,7 @@ Run: .venv\\Scripts\\python.exe companion\\talker.py
 import difflib
 import hashlib
 import json
+import math
 import os
 import queue
 import random
@@ -250,7 +251,7 @@ Sound like a real man, never like an assistant:
 {fun}
 - Names: use only places and people given to you, plus Затон, Юпітер, Прип'ять, Янов, ЧАЕС, Велика Земля; Борода runs the Скадовськ bar. Unsure? Say it vaguely.
 - No stage directions, sounds written as words, quotes, emoji, or words from other languages (except the English voice tags). Never say you are an AI or a game character. If the player's words make no sense, react like a confused stalker.
-- You don't know the player's name unless he told you or your memory has it; never make one up, call him something else.
+- You don't know the player's name unless he told you, your memory has it, or his nickname is given; never make one up. He is NOT Стрілець, Мічений or any other Zone legend: never call him by a legend's name.
 - Things everyone around already knows (an emission, the weather, the night) are not news: don't bring them up again and again.
 - Manners follow who you are and how he treats you. Asked politely, or offered work, money, help or a drink, a friend or neutral stalker answers decently, even warmly; his swearing is just how he talks, not insults at the player. Insult the player only if he was rude, threatened you, did you wrong, or you are a bandit, an enemy or a man in a foul mood for a reason. Interested offers get interest, not abuse.{tags}"""
 
@@ -335,6 +336,31 @@ def slur_note(npc):
         return (" Street slurs like «підар» are not your usual talk: only very rarely, when you are really angry "
                 "or mocking someone. Never preach hate about whole groups.")
     return ""
+
+
+# The nickname stalkers know the player by (empty: they don't know his name)
+PLAYER_NAME = os.environ.get("PLAYER_NAME", "").strip()
+EVENT_RADIUS = float(os.environ.get("EVENT_RADIUS", "50"))  # metres: what an NPC could have seen or heard
+
+
+def knows(npc, who):
+    """Could this NPC know what happened to `who` (a victim, a man who was shot)? Only if it was within
+    EVENT_RADIUS of him, or in the same camp/area (A-Life smart terrain). Without positions (an older game
+    script): only if both were near the player."""
+    if not npc or not who:
+        return False
+    if npc.get("id") is not None and npc.get("id") == who.get("id"):
+        return True
+    if None not in (npc.get("x"), npc.get("z"), who.get("x"), who.get("z")):
+        return math.hypot(npc["x"] - who["x"], npc["z"] - who["z"]) <= EVENT_RADIUS
+    if npc.get("place") and npc.get("place") == who.get("place"):
+        return True
+    return npc.get("dist", 99) + who.get("dist", 99) <= EVENT_RADIUS
+
+
+def event_subject(ev):
+    """Who an event happened to, for deciding who knows about it."""
+    return (ev.get("victim") if ev.get("type") == "death" else ev.get("npc")) or {}
 
 
 def mentions(npc, text):
@@ -895,14 +921,30 @@ def drop_own_name(line, npc):
     first = ((npc or {}).get("name") or "").split(" ")[0]
     if len(first) < 3:
         return line
-    stem = re.escape(first[:max(3, len(first) - 2)])  # Жорка: Жорко, Жоро, Жорику
-    name = stem + r"\w{0,3}"
+    stem = first[:max(3, len(first) - 2)]  # Жорка: Жорко, Жоро, Жорику
+    # Russian and Ukrainian spellings of the same name ("Діма"/"Дима", "Сєня"/"Сеня"): treat those letters as one
+    same = {"і": "[іиы]", "и": "[иіы]", "ы": "[ыиі]", "ї": "[їі]", "е": "[еєэ]", "є": "[єе]", "э": "[эе]",
+            "ґ": "[ґг]", "г": "[гґ]"}
+    name = "".join(same.get(c.lower(), re.escape(c)) for c in stem) + r"\w{0,3}"
     # "Кастете, ти..." at the start of a sentence (also after "..." or a voice tag): drop it, capitalise what follows
     fixed = re.sub(r"(^|[.!?…]\s+)(\[[^\]]*\]\s*)?" + name + r",\s*(\w)",
                    lambda m: m.group(1) + (m.group(2) or "") + m.group(3).upper(), line, flags=re.I)
     # "...ти хоч моргни, Кастете!" in the middle or at the end: drop ", Кастете"
     fixed = re.sub(r",\s*" + name + r"(?=\s*[,.!?…]|\s*$)", "", fixed, flags=re.I)
     return fixed.strip() or line
+
+
+LEGEND_CALL = r"(стрільцю|стрілець|стрілок|стрелок|мічений|меченый|мічений)"
+
+
+def drop_legend_address(text):
+    """"...я тобі скажу, Стрілець, тіко тихо": calling the player by a legend's name. Talking ABOUT Стрілець stays."""
+    # "Стрільцю, ..." / "Мічений, ..." opening a sentence
+    text = re.sub(r"(^|[.!?…]\s+)(\[[^\]]*\]\s*)?" + LEGEND_CALL + r",\s*(\w)",
+                  lambda m: m.group(1) + (m.group(2) or "") + m.group(4).upper(), text, flags=re.I)
+    # ", Стрілець," between commas, or ", Стрільцю!" at the end
+    text = re.sub(r",\s*" + LEGEND_CALL + r"(?=\s*[,.!?…]|\s*$)", "", text, flags=re.I)
+    return text.strip()
 
 
 def too_similar(text, recent, threshold=0.6):
@@ -1085,9 +1127,13 @@ class Game:
         fighting = [n for n in npcs if n.get("relation") == "enemy" and n["dist"] < 30]
         return fighting[0] if fighting else None
 
-    def describe_events(self):
+    def describe_events(self, *listeners):
+        """What just happened, as far as these NPCs could know (near them or in their area); all of it if
+        nobody is given."""
         lines = []
         for ts, ev in self.recent_events[-8:]:
+            if listeners and not any(knows(n, event_subject(ev)) for n in listeners if n):
+                continue  # happened somewhere they couldn't see or hear
             ago = int(time.time() - ts)
             kind = ev.get("type")
             if kind == "death":
@@ -1284,7 +1330,7 @@ class Brain:
                                          or self.DEAL_WORDS.search(player_text or ""))
             text = self.ask_gemini(ask, system, smart) if LLM_PROVIDER == "gemini" else self.ask_claude(ask, system)
             text, self.last_action, self.last_extras = split_action(text or "")
-            text = drop_own_name(drop_narration(text, npc), npc)
+            text = drop_legend_address(drop_own_name(drop_narration(text, npc), npc))
             # asked to wave, salute, sit...: he does it even if the model forgot the tag (not enemies, not the dying)
             asked = gesture_asked(player_text or (extra or {}).get("line", "")) if mode in ("reply", "addressed") else None
             if asked and npc.get("relation") != "enemy" and not npc.get("wounded") and not is_monolith(npc) \
@@ -1527,7 +1573,14 @@ class Brain:
 
         # The player as you see him
         rel = {"enemy": "an enemy", "friend": "a friend"}.get(npc.get("relation"), "a stranger")
-        player = f"Player ({rel}, {npc.get('dist', 0):.0f} m away)"
+        player = f"Player ({rel}, {npc.get('dist', 0):.0f} m away"
+        # his nickname only now and then (given every time, the model starts every line with it), and always when
+        # he asks who he is
+        asks_name = re.search(r"хто я|як мене звати|моє ім'я|мене знаєш|знаєш мене|як мене кличуть",
+                              player_text or "", re.I)
+        if PLAYER_NAME and (asks_name or random.random() < 0.5):
+            player += f", stalkers know him as «{PLAYER_NAME}»; don't open with it"
+        player += ")"
         if mode != "greet":  # greetings kept turning into jokes about his rifle
             player += f": holding {item_name(actor.get('weapon'))}"
         if mode == "reply":
@@ -2386,7 +2439,7 @@ class Talker:
             elif what == "ptt_up":
                 self.ptt_up.set()
 
-    MOD_VERSION = 10  # must match MOD_VERSION in talker_bridge.script
+    MOD_VERSION = 11  # must match MOD_VERSION in talker_bridge.script
 
     def check_mod_version(self, state):
         """The game reads its scripts only when a save loads: warn if it still runs an older copy."""
@@ -2431,8 +2484,8 @@ class Talker:
                 victim = ev.get("victim") or {}
                 what = (f"he killed {victim.get('name')} "
                         f"({COMMUNITIES.get(victim.get('community'), victim.get('community'))})")
-                for n in npcs:
-                    if n.get("id") != victim.get("id") and n.get("dist", 99) < 30:
+                for n in npcs:  # only men who could see it: near the victim or in the same area
+                    if n.get("id") != victim.get("id") and knows(n, victim):
                         self.memory.witness(self.npc_key(n, state, level), what)
             elif ev.get("type") == "actor_hit_npc" and ev.get("npc"):
                 self.memory.witness(self.npc_key(ev["npc"], state, level), "he shot at me")
@@ -2471,7 +2524,7 @@ class Talker:
 
     def converse(self, npc, state, player_text, mode=None, extra=None):
         key = self.npc_key(npc, state)
-        reply = self.brain.reply(npc, state, self.game.describe_events(), self.memory.history(key), player_text, mode,
+        reply = self.brain.reply(npc, state, self.game.describe_events(npc), self.memory.history(key), player_text, mode,
                                  recent=self.recent_lines(), extra=extra, remembers=self.memory.remembers(key))
         if not reply:
             return None, None
@@ -2625,7 +2678,7 @@ class Talker:
             return
         other = others[0]
         extra = {"name": npc.get("name"), "player": player_text, "line": line}
-        reply = self.brain.reply(other, state, self.game.describe_events(), [], "", "chime",
+        reply = self.brain.reply(other, state, self.game.describe_events(other), [], "", "chime",
                                  recent=self.recent_lines(), extra=extra)
         if reply:
             log(f"  {other.get('name')} (joins in): {reply}")
@@ -2737,7 +2790,7 @@ class Talker:
                     self.game.send("you", None, text)
             else:
                 self.game.send("info", None, "Не розчув, спробуйте ще раз")
-            if text and to_everyone(text) and self.group_answer(state, text, "The player (a stalker)",
+            if text and to_everyone(text) and self.group_answer(state, text, f"The player (a stalker{' called ' + PLAYER_NAME if PLAYER_NAME else ''})",
                                                                      from_player=True):
                 return  # "Пацани, ..." — several men around answered
             if not npc:
@@ -2766,7 +2819,8 @@ class Talker:
                 speaker = next((n for n in npcs if n["id"] == hit.get("id") and n["relation"] != "enemy"), None)
             elif ev.get("type") == "death":
                 victim_id = (ev.get("victim") or {}).get("id")
-                witnesses = [n for n in npcs if n["id"] != victim_id and n["dist"] < 20
+                victim = ev.get("victim") or {}
+                witnesses = [n for n in npcs if n["id"] != victim_id and knows(n, victim)
                              and n["relation"] != "enemy" and not n.get("in_combat")]
                 if witnesses and random.random() < 0.6:
                     speaker = witnesses[0]
@@ -2913,7 +2967,7 @@ class Talker:
         if not self.busy.acquire(blocking=False):
             return
         try:
-            lines = self.brain.chat(a, b, state, self.game.describe_events(), self.recent_lines(),
+            lines = self.brain.chat(a, b, state, self.game.describe_events(a, b), self.recent_lines(),
                                     memories=[self.memory.remembers(self.npc_key(n, state)) for n in (a, b)])
             if len(lines) < 2 or too_similar(strip_tags(lines[0][1]), self.recent_lines()):
                 return
