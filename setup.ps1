@@ -94,7 +94,7 @@ if ($db -and -not (Test-Path 'samples\human_01_ukr.mp3')) {
         'StalkerTalker', 'YesNo')
     if ($answer -eq 'Yes') {
         & '.venv\Scripts\python.exe' tools\make_voice_samples.py $db.FullName samples
-        Say "Samples are in $root\samples (see README, 'Voices')." Green
+        Say "Samples are in $root\samples (see README, step 3)." Green
     }
 }
 Say "`nDone. Start the game, then StalkerTalker from the desktop." Green
