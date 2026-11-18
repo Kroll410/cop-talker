@@ -250,6 +250,7 @@ Sound like a real man, never like an assistant:
 {fun}
 - Names: use only places and people given to you, plus Затон, Юпітер, Прип'ять, Янов, ЧАЕС, Велика Земля; Борода runs the Скадовськ bar. Unsure? Say it vaguely.
 - No stage directions, sounds written as words, quotes, emoji, or words from other languages (except the English voice tags). Never say you are an AI or a game character. If the player's words make no sense, react like a confused stalker.
+- You don't know the player's name unless he told you or your memory has it; never make one up, call him something else.
 - Things everyone around already knows (an emission, the weather, the night) are not news: don't bring them up again and again.
 - Manners follow who you are and how he treats you. Asked politely, or offered work, money, help or a drink, a friend or neutral stalker answers decently, even warmly; his swearing is just how he talks, not insults at the player. Insult the player only if he was rude, threatened you, did you wrong, or you are a bandit, an enemy or a man in a foul mood for a reason. Interested offers get interest, not abuse.{tags}"""
 
@@ -410,7 +411,9 @@ def has_slur(text, npc=None):
 # Weak words ("давай", "добре", "ладно", "ну") count only when they are (almost) the whole answer, so
 # "Давай, розкажи ще" is not a deal.
 AGREE_STRONG = re.compile(r"(?<!\w)(згода|згоден|згодна|згодні|домовились|домовилися|домовилось|по руках|по рукам|"
-                          r"хай буде|тримай|тримайте|бери|беріть|окей|ок|гаразд|йде|забились|беру|куплю|плачу)(?!\w)",
+                          r"хай буде|тримай|тримайте|бери|беріть|окей|ок|гаразд|йде|забились|беру|куплю|плачу|"
+                          r"купую|купляю|візьму|беремо|берем|заплачу|плачу|лади|ладно, беру|давай сюди|продано|"
+                          r"куплено|згідний|годиться|підходить|влаштовує|домовленість|ок, беру|ок беру)(?!\w)",
                           re.I)
 AGREE_WEAK = re.compile(r"(?<!\w)(давай|добре|ладно|ну|так|ага|угу|та|ну)(?!\w)", re.I)
 # A number in his line is a price only next to money words (not "бачив 3 кабани").
@@ -433,12 +436,22 @@ AGREE_WORDS = AGREE_STRONG  # kept for anything else that imports it
 # Whole number words only, so "сьогодні", "всім", "просто" are not 1, 7 and 100 coupons.
 NUMBER_WORDS = [("один|одна|одну|одного|одне", 1), ("два|дві|двох", 2), ("три|трьох", 3), ("чотири|чотирьох", 4),
                 ("п'ять|п'яти", 5), ("шість|шести", 6), ("сім|семи", 7), ("вісім|восьми", 8),
-                ("дев'ять|дев'яти", 9), ("десять|десяти", 10), ("п'ятнадцять|п'ятнадцяти", 15),
+                ("дев'ять|дев'яти", 9), ("десять|десяти", 10), ("одинадцять|одинадцяти", 11),
+                ("дванадцять|дванадцяти", 12), ("тринадцять|тринадцяти", 13), ("чотирнадцять|чотирнадцяти", 14),
+                ("п'ятнадцять|п'ятнадцяти", 15), ("шістнадцять|шістнадцяти", 16), ("сімнадцять|сімнадцяти", 17),
+                ("вісімнадцять|вісімнадцяти", 18), ("дев'ятнадцять|дев'ятнадцяти", 19),
                 ("двадцять|двадцяти", 20), ("тридцять|тридцяти", 30), ("сорок|сорока", 40),
-                ("п'ятдесят|п'ятдесяти", 50), ("сто", 100), ("двісті", 200), ("триста", 300), ("чотириста", 400),
+                ("п'ятдесят|п'ятдесяти", 50), ("шістдесят|шістдесяти", 60), ("сімдесят|сімдесяти", 70),
+                ("вісімдесят|вісімдесяти", 80), ("дев'яносто", 90),
+                ("сто", 100), ("двісті", 200), ("триста", 300), ("чотириста", 400),
                 ("п'ятсот", 500), ("шістсот", 600), ("сімсот", 700), ("вісімсот", 800), ("дев'ятсот", 900),
                 ("тисяча|тисячу|тисячі", 1000)]
+NUMBER_VALUE = {form: value for words, value in NUMBER_WORDS for form in words.split("|")}
 THOUSANDS = r"(тисяч\w*|тис\b\.?|штук\w*|штуки|косар\w*|к(?![\wа-яіїєґ]))"
+# A small number is a price, not a count, right after "за/по" or right before a money word ("за дванадцять",
+# "12 купонів"); "три кабани" stays a count.
+PRICE_BEFORE = re.compile(r"(?:^|\s)(за|по|ціна|коштує|віддам за|продам за|дам|даю|плачу)\s*$")
+PRICE_AFTER = re.compile(r"^\s*(купон\w*|грн|гривн\w*|гривен\w*|рубл\w*|бабок|баксів|монет\w*)")
 
 
 def amounts(text):
@@ -451,12 +464,34 @@ def amounts(text):
         found.append(number * 1000 if m.group(2) else number)
     for m in re.finditer(r"(?<![\w'])(десятк[аиу])(?![\w'])", low):  # "десятка" = 10 000
         found.append(10000)
-    for words, value in NUMBER_WORDS:
-        for m in re.finditer(r"(?<![\w'])(?:" + words + r")(?![\w'])\s*" + THOUSANDS + "?", low):
-            if m.group(1):
-                found.append(value * 1000)
-            elif value > 20:  # a bare "п'ять" or "три" is a count, not a price
-                found.append(value)
+    # Number words, joined into one number when they follow each other: "двадцять п'ять" = 25,
+    # "триста п'ятдесят" = 350, "п'ять тисяч двісті" = 5200.
+    words = list(re.finditer(r"[a-zа-яіїєґ']+", low))
+    i = 0
+    while i < len(words):
+        if words[i].group(0) not in NUMBER_VALUE:
+            i += 1
+            continue
+        start, total, part = words[i].start(), 0, 0
+        while i < len(words) and (words[i].group(0) in NUMBER_VALUE
+                                  or re.fullmatch(THOUSANDS, words[i].group(0))):
+            w = words[i].group(0)
+            if w in NUMBER_VALUE and NUMBER_VALUE[w] == 1000:
+                total += max(part, 1) * 1000
+                part = 0
+            elif w in NUMBER_VALUE:
+                part += NUMBER_VALUE[w]
+            else:  # тисяч, штук, косарів
+                total += max(part, 1) * 1000
+                part = 0
+            end = words[i].end()
+            i += 1
+        value = total + part
+        thousands = total > 0
+        is_price = (thousands or value > 20 or PRICE_BEFORE.search(low[:start])
+                    or PRICE_AFTER.match(low[end:]))
+        if value and is_price:  # a bare "п'ять" or "три кабани" is a count, not a price
+            found.append(value)
     return found
 
 
