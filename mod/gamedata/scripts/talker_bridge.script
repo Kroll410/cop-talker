@@ -1,0 +1,1093 @@
+-- StalkerTalker bridge: shares game state with the companion app through files
+-- in <game root>\talker\ and shows the AI replies in game.
+--   state.json   - rewritten twice a second: actor, level, time, nearby NPCs
+--   events.jsonl - appended: deaths, hits, player using an NPC
+--   inbox.txt    - written by the companion: "say|<npc_id>|<text>" lines; read and deleted here
+-- Every entry point is called through pcall from the hooks, so a bug here never crashes the game.
+
+MOD_VERSION = 10  -- the companion app checks this, so a game still running an old copy of this script is noticed
+local dir = nil
+local next_state_write = 0
+local next_inbox_check = 0
+local hit_cooldown = {}
+
+local function path(name)
+	if not dir then
+		local ok, p = pcall(function() return getFS():update_path("$fs_root$", "talker\\") end)
+		dir = (ok and p) or "talker\\"  -- the installer creates this folder
+	end
+	return dir .. name
+end
+
+-- forward declarations (defined further down, used by npc_info)
+local emission_active, in_cover, append_event
+local stock_cache = {}  -- what NPCs carry, cached (filled further down)
+local followers = {}
+
+local function log_error(msg)
+	local f = io.open(path("bridge_errors.log"), "a")
+	if f then f:write(os.date("%H:%M:%S ") .. tostring(msg) .. "\n"); f:close() end
+end
+
+-- ------------------------------------------------------------- JSON
+local function esc(s)
+	s = tostring(s)
+	s = string.gsub(s, '[%c"\\]', function(c)
+		if c == '"' then return '\\"' elseif c == "\\" then return "\\\\"
+		elseif c == "\n" then return "\\n" elseif c == "\r" then return "" elseif c == "\t" then return " " end
+		return ""
+	end)
+	return s
+end
+
+local function to_json(v)
+	local t = type(v)
+	if t == "table" then
+		if v.__array or v[1] ~= nil then
+			local out = {}
+			for i = 1, #v do out[i] = to_json(v[i]) end
+			return "[" .. table.concat(out, ",") .. "]"
+		end
+		local out = {}
+		for k, val in pairs(v) do
+			if k ~= "__array" then table.insert(out, '"' .. esc(k) .. '":' .. to_json(val)) end
+		end
+		return "{" .. table.concat(out, ",") .. "}"
+	elseif t == "string" then
+		return '"' .. esc(v) .. '"'
+	elseif t == "number" then
+		if v == math.floor(v) then return string.format("%d", v) end
+		return string.format("%.3f", v)
+	elseif t == "boolean" then
+		return v and "true" or "false"
+	end
+	return "null"
+end
+
+-- ------------------------------------------------------------- object info
+local function relation_name(npc)
+	local r = npc:relation(db.actor)
+	if r == game_object.enemy then return "enemy" elseif r == game_object.friend then return "friend" end
+	return "neutral"
+end
+
+local function weapon_of(obj)
+	local item = obj:active_item()
+	return item and item:section() or nil
+end
+
+local function npc_info(npc)
+	if not npc then return nil end
+	local info = { id = npc:id(), name = npc:character_name(), community = npc:character_community(),
+		rank = npc:character_rank(), story_name = npc:name(), alive = npc:alive(),
+		health = npc.health, relation = relation_name(npc), weapon = weapon_of(npc),
+		dist = npc:position():distance_to(db.actor:position()) }
+	local ok, prefix = pcall(function() return npc:sound_prefix() end)
+	if ok then info.voice = prefix end
+	local enemy = npc:best_enemy()
+	info.in_combat = enemy ~= nil
+	if enemy then info.fighting = enemy:id() == db.actor:id() and "player" or enemy:name() end
+	local okw, wounded = pcall(function() return xr_wounded.is_wounded(npc) end)
+	if okw then info.wounded = wounded and true or false end
+	local okg, gw = pcall(function() return relation_registry.community_goodwill(npc:character_community(), db.actor:id()) end)
+	if okg then info.goodwill = gw end
+	local okp, place = pcall(function()
+		local se = alife():object(npc:id())
+		if se and se.m_smart_terrain_id ~= 65535 then
+			return smart_names.get_smart_terrain_name(alife():object(se.m_smart_terrain_id))
+		end
+	end)
+	if okp and place then info.place = place end
+	local oks, story = pcall(function() return get_object_story_id(npc:id()) end)
+	info.story = (oks and story ~= nil) and true or false
+	if emission_active() then info.sheltered = in_cover(npc:position()) end
+	info.following = followers[npc:id()] or false
+	local okq, squad = pcall(function() return get_object_squad(npc) end)
+	if okq and squad then
+		info.squad = squad.id
+		info.leader = squad:commander_id() == npc:id()
+	end
+	return info
+end
+
+local function mutant_info(obj, apos)
+	return { id = obj:id(), kind = obj:section(), dist = obj:position():distance_to(apos), health = obj.health }
+end
+
+function emission_active()
+	local ok, started = pcall(function() return surge_manager.get_surge_manager().started end)
+	return ok and started and true or false
+end
+
+-- Inside one of the game's emission shelters? The surge manager's own cover list is often empty
+-- (it's built before the zones exist), so read the shelter names from its config ourselves.
+local cover_names = nil
+function in_cover(pos)
+	local ok, inside = pcall(function()
+		if not cover_names then
+			cover_names = {}
+			local ini = ini_file("misc\\surge_manager.ltx")
+			for i = 0, ini:line_count("list") - 1 do
+				local _, id = ini:r_line("list", i, "", "")
+				table.insert(cover_names, id)
+			end
+		end
+		for _, name in ipairs(cover_names) do
+			local zone = db.zone_by_name[name]
+			if zone and zone:inside(pos) then return true end
+		end
+		return false
+	end)
+	if not ok then log_error("in_cover: " .. tostring(inside)) end
+	return ok and inside or false
+end
+
+-- ------------------------------------------------------------- follow the player
+-- Uses the game's own companion scheme (xr_companion); "stay" hands the NPC back to its normal logic.
+
+local function start_follow(npc)
+	local ini = ini_file("scripts\\talker_follow.ltx")
+	xr_logic.configure_schemes(npc, ini, "scripts\\talker_follow.ltx", modules.stype_stalker, "logic", "")
+	xr_logic.activate_by_section(npc, ini, "companion@talker", "", false)
+	followers[npc:id()] = true
+end
+
+local function stop_follow(npc)
+	if not followers[npc:id()] then return end
+	followers[npc:id()] = nil
+	xr_logic.initialize_obj(npc, db.storage[npc:id()], false, db.actor, modules.stype_stalker)
+end
+
+-- ------------------------------------------------------------- emotes, contracts, money
+-- Emotes play one of the game's own animation states for a few seconds, then hand the NPC back to his logic.
+local EMOTES = { hello = "hello", salute = "salut", threat = "threat", punch = "punch", hands_up = "hands_up",
+	fold_arms = "fold_arms", sit = "sit_ass", refuse = "refuse", claim = "claim", backoff = "backoff",
+	guitar = "play_guitar", harmonica = "play_harmonica", binocular = "binocular", pain = "psy_pain" }
+local LONG_EMOTES = { sit = 20000, guitar = 20000, harmonica = 20000 }
+local emotes = {}
+
+local function play_emote(npc, name)
+	local state = EMOTES[name]
+	if not state then return false, "unknown gesture" end
+	if npc:best_enemy() then return false, "he is fighting" end
+	local okw, wounded = pcall(function() return xr_wounded.is_wounded(npc) end)
+	if okw and wounded then return false, "he is wounded" end
+	local id = npc:id()
+	local prev = emotes[id] and emotes[id].prev or state_mgr.get_state(npc)
+	state_mgr.set_state(npc, state, nil, nil, { look_object = db.actor }, { fast_set = true })
+	emotes[id] = { till = time_global() + (LONG_EMOTES[name] or 4500), prev = prev, state = state }
+	return true
+end
+
+local function update_emotes()
+	local now = time_global()
+	for id, e in pairs(emotes) do
+		local npc = level.object_by_id(id)
+		if not npc or not npc:alive() or npc:best_enemy() then
+			emotes[id] = nil
+		elseif now > e.till then
+			emotes[id] = nil
+			pcall(state_mgr.set_state, npc, e.prev or "idle", nil, nil, nil, { fast_set = true })
+		elseif state_mgr.get_state(npc) ~= e.state then  -- his logic took over too early: keep it going
+			pcall(state_mgr.set_state, npc, e.state, nil, nil, { look_object = db.actor })
+		end
+	end
+end
+
+local contracts = {}  -- contracts[killer id] = { target = id, since = ms, ... }, until the job is over
+local grudges = {}    -- grudges[a][b] = true: a fights b, even where a base forbids fighting
+
+-- xr_combat_ignore asks this, so a base's "no fighting" rule lets agreed fights through.
+function is_contract(obj, enemy)
+	if not obj or not enemy then return false end
+	local a, b = grudges[obj:id()], grudges[enemy:id()]
+	return (a and a[enemy:id()]) or (b and b[obj:id()]) or false
+end
+
+-- a becomes b's enemy the way the game itself does it (set_squads_enemies): relation on the online object,
+-- goodwill on the A-Life one so the simulation doesn't undo it, and he is told where b is.
+local function add_grudge(a, b)
+	if not a or not b or not a:alive() or a:id() == b:id() then return end
+	grudges[a:id()] = grudges[a:id()] or {}
+	grudges[a:id()][b:id()] = true
+	pcall(function() a:set_relation(game_object.enemy, b) end)
+	pcall(function() a:force_set_goodwill(-5000, b) end)
+	pcall(function() alife():object(a:id()):force_set_goodwill(-5000, b:id()) end)
+	pcall(function() a:make_object_visible_somewhen(b) end)
+end
+
+local function squad_mates(npc)
+	local mates = {}
+	pcall(function()
+		local squad = get_object_squad(npc)
+		if not squad then return end
+		for k in squad:squad_members() do
+			local obj = db.storage[k.id] and db.storage[k.id].object
+			if obj and obj:alive() and obj:id() ~= npc:id() then table.insert(mates, obj) end
+		end
+	end)
+	return mates
+end
+
+-- A fight between two men: both hate each other, and the target's squad stands by him.
+local function start_feud(killer, target)
+	add_grudge(killer, target)
+	add_grudge(target, killer)
+	for _, mate in ipairs(squad_mates(target)) do
+		add_grudge(mate, killer)
+		add_grudge(killer, mate)
+	end
+end
+
+-- A paid hit. The target may be anywhere on this level, also far away or offline: then the killer's squad
+-- hunts the target's squad with the game's own "attack a squad" move (hooked in sim_squad_scripted,
+-- sim_squad_actions, xr_reach_task); when both are online, they simply fight. If both are offline (far from
+-- the player) and meet, the hit happens off-screen.
+local HUNT_GIVE_UP = 15 * 60 * 1000  -- ms of real time before the killer gives up
+local hunts = {}  -- killer squad id -> target squad id, while a squad is out hunting
+
+-- The hooks in the game's squad scripts ask this.
+function is_hunting(squad)
+	return squad ~= nil and hunts[squad.id] ~= nil and squad.assigned_target_id == hunts[squad.id]
+end
+
+local function squad_of(id)
+	local se = alife():object(id)
+	return se and se.group_id and se.group_id ~= 65535 and alife():object(se.group_id) or nil
+end
+
+local function send_hunting(killer_id, target_id)
+	local squad, target_squad = squad_of(killer_id), squad_of(target_id)
+	if not squad or not target_squad or squad.id == target_squad.id then return false end
+	hunts[squad.id] = target_squad.id
+	if squad.assigned_target_id == target_squad.id and squad.current_action
+			and squad.current_action.name == "reach_target" then
+		return true
+	end
+	if squad.current_action then pcall(function() squad.current_action:finalize() end) end
+	squad.assigned_target_id = target_squad.id
+	squad.current_target_id = nil
+	squad.current_action = sim_squad_actions.reach_target(squad)
+	squad.current_action:make(false)
+	return true
+end
+
+local function stop_hunting(killer_id)
+	local squad = squad_of(killer_id)
+	if squad and hunts[squad.id] then
+		hunts[squad.id] = nil
+		squad.current_action = nil
+		squad:clear_assigned_target()  -- the simulation picks his next job by itself
+	end
+end
+
+local function se_alive(se)
+	if not se then return false end
+	local ok, alive = pcall(function() return se:alive() end)
+	return ok and alive
+end
+
+local function contract_kill(npc, target_id)
+	if not target_id or target_id == npc:id() then return false end
+	local se = alife():object(target_id)
+	if not se_alive(se) then return false end
+	local ok, story = pcall(function() return get_object_story_id(target_id) end)
+	if ok and story ~= nil then return false end  -- quest people are off limits
+	pcall(stop_follow, npc)
+	contracts[npc:id()] = { target = target_id, since = time_global(), next_look = 0 }
+	local target = level.object_by_id(target_id)
+	if target and target:alive() and target:position():distance_to(npc:position()) < 60 then
+		start_feud(npc, target)  -- he's right here: straight to the fight
+	else
+		pcall(function() alife():object(npc:id()):force_set_goodwill(-5000, target_id) end)
+		local okh, sent = pcall(send_hunting, npc:id(), target_id)
+		if not (okh and sent) then log_error("hunt: " .. tostring(sent)) end
+	end
+	return true
+end
+
+-- Shot by a man he has a feud with: renew it (the game may have reset relations) and call in his squad.
+local function on_feud_hit(victim, who)
+	if not is_contract(victim, who) then return end
+	start_feud(who, victim)
+end
+
+local function contract_over(killer_id, c, dead, why)
+	contracts[killer_id] = nil
+	pcall(stop_hunting, killer_id)
+	append_event({ type = "contract_over", killer = killer_id, target = c.target, target_dead = dead, reason = why })
+end
+
+local function update_contract(killer_id, c, now)
+	local se_killer, se_target = alife():object(killer_id), alife():object(c.target)
+	if not se_alive(se_target) then return contract_over(killer_id, c, true) end
+	if not se_alive(se_killer) then return contract_over(killer_id, c, false, "killer died") end
+	if now - c.since > HUNT_GIVE_UP then return contract_over(killer_id, c, false, "gave up") end
+	local killer, target = level.object_by_id(killer_id), level.object_by_id(c.target)
+	if killer and target then
+		-- both online: once he's close, the feud starts; keep telling him where the target is
+		if now >= c.next_look then
+			c.next_look = now + 2000
+			if killer:position():distance_to(target:position()) < 80 or c.feud then
+				if not c.feud then c.feud = true; start_feud(killer, target) end
+				add_grudge(killer, target)
+				pcall(function() killer:make_object_visible_somewhen(target) end)
+			else
+				pcall(send_hunting, killer_id, c.target)
+			end
+		end
+	elseif not killer and not target then
+		-- both far from the player: when the squads meet, the hit happens off-screen
+		if se_killer.position:distance_to(se_target.position) < 30 then
+			local done = pcall(function() alife():kill_entity(se_target) end)
+			if not done then pcall(function() alife():release(se_target, true) end) end
+			return contract_over(killer_id, c, true, "off-screen")
+		end
+		if now >= c.next_look then c.next_look = now + 5000; pcall(send_hunting, killer_id, c.target) end
+	elseif now >= c.next_look then
+		c.next_look = now + 3000
+		pcall(send_hunting, killer_id, c.target)  -- one of them is out of reach: keep walking
+	end
+end
+
+local next_contract_check = 0
+local function update_contracts()
+	local now = time_global()
+	if now < next_contract_check then return end
+	next_contract_check = now + 500
+	for killer_id, c in pairs(contracts) do
+		local ok, err = pcall(update_contract, killer_id, c, now)
+		if not ok then log_error("contract: " .. tostring(err)) end
+	end
+	for id in pairs(grudges) do  -- forget the dead
+		local obj = level.object_by_id(id)
+		if not obj or not obj:alive() then grudges[id] = nil end
+	end
+end
+
+-- Stalkers on this level that aren't in the 40 m list: a hit can be ordered on them too.
+local far_cache = { at = 0, list = nil }
+local function far_stalkers(near)
+	local now = time_global()
+	if far_cache.list and now < far_cache.at then return far_cache.list end
+	local apos, list = db.actor:position(), {}
+	local level_id = game_graph():vertex(alife():actor().m_game_vertex_id):level_id()
+	for id, squad in pairs(sim_board.get_sim_board().squads) do
+		if game_graph():vertex(squad.m_game_vertex_id):level_id() == level_id then
+			for k in squad:squad_members() do
+				local se = alife():object(k.id)
+				if se and not near[k.id] and se_alive(se) and IsStalker(nil, se:clsid()) then
+					local okn, info = pcall(function()
+						local story = get_object_story_id(k.id)
+						return { id = k.id, name = se:character_name(), community = se:community(),
+							dist = math.floor(se.position:distance_to(apos)), online = se.online and true or false,
+							story = story ~= nil or nil }
+					end)
+					if okn and info and info.name and info.name ~= "" then table.insert(list, info) end
+				end
+			end
+		end
+	end
+	table.sort(list, function(a, b) return a.dist < b.dist end)
+	local out = { __array = true }
+	for i = 1, math.min(#list, 60) do out[i] = list[i] end
+	far_cache = { at = now + 5000, list = out }
+	return out
+end
+
+-- Mouth moving while the AI voice speaks: the NPC plays a silent "talk" sound (gamedata\sounds\talker\mouth_N.ogg,
+-- N seconds long) and the engine animates his head and mouth by itself, like with the game's own voice lines.
+-- The registered sound id is kept in the NPC's db.storage table: the game makes that table anew whenever he
+-- spawns again (went offline and came back), which is exactly when the clips must be registered again.
+-- (Comparing game objects with == fails in this engine: "No such operator defined".)
+local mouth = {}  -- fallback by npc id, for an NPC without db.storage
+local next_mouth_id = 9100
+
+local function new_sound_id()
+	local ok, id = pcall(function() return sound_theme.id() end)
+	if ok and type(id) == "number" then return id end
+	next_mouth_id = next_mouth_id + 1
+	return next_mouth_id
+end
+
+local function talk_mouth(npc, seconds)
+	local st = db.storage[npc:id()]
+	local holder = st or mouth
+	local key = st and "talker_mouth_id" or npc:id()
+	local id = holder[key]
+	if id == nil then  -- first time on this spawn of him: register the clips
+		local prefix = npc:sound_prefix()
+		npc:sound_prefix("")
+		id = new_sound_id()
+		local ok, count = pcall(function() return npc:add_sound("talker\\mouth_", 64, snd_type.talk, 2, 1, id) end)
+		npc:sound_prefix(prefix)
+		if not ok or not count or count <= 0 then
+			log_error("mouth: add_sound failed for " .. npc:name() .. ": " .. tostring(count))
+			id = false
+		end
+		holder[key] = id
+	end
+	if not id then return false end
+	local n = math.max(1, math.min(20, math.floor((tonumber(seconds) or 3) + 0.5)))
+	npc:play_sound(id, 0.01, 0, 1, 0, n - 1)
+	return true
+end
+
+-- He hands you one item he really has (a deal agreed in conversation), with the game's "item received" notice.
+local function give_item(npc, section)
+	local item = npc:object(section)
+	if not item then return false end
+	npc:transfer_item(item, db.actor)
+	stock_cache[npc:id()] = nil
+	pcall(news_manager.relocate_item, db.actor, "in", section)
+	return true
+end
+
+-- The game's own "money given / received" notice: coupons icon, amount, and the PDA sound.
+local function money_news(direction, amount)
+	pcall(news_manager.relocate_money, db.actor, direction, amount)
+	pcall(xr_sound.set_sound_play, db.actor:id(), "pda_tips")
+end
+
+local last_take_ok = {}  -- npc id -> did the player's last payment to him go through
+
+local function money_action(npc, kind, amount)
+	amount = math.floor(tonumber(amount) or 0)
+	if kind == "take" then last_take_ok[npc:id()] = false end  -- a refused payment never leaves an old "ok" behind
+	if amount <= 0 or amount > 100000 then return false end
+	if kind == "take" then
+		local ok = db.actor:money() >= amount
+		last_take_ok[npc:id()] = ok  -- goods and hits marked ":paid" happen only if this went through
+		if not ok then return false end
+		db.actor:transfer_money(amount, npc)  -- you pay him
+		money_news("out", amount)
+		return true
+	elseif kind == "give" then
+		amount = math.min(amount, npc:money())  -- out of his own pocket: no money from nowhere
+		if amount <= 0 then return false end
+		npc:transfer_money(amount, db.actor)  -- he pays you
+		money_news("in", amount)
+		return true
+	end
+	return false
+end
+
+-- Actions decided by the AI. Story NPCs only do emotes and money, so quests can't break.
+local function do_action(npc_id, action)
+	local npc = npc_id and level.object_by_id(npc_id)
+	if not npc or not npc:alive() or not db.actor then return end
+	local kind, arg = string.match(action, "^(%w+):(.+)$")
+	-- "item:medkit:paid", "kill:123:paid": only if the payment just before it really went through
+	if arg and string.sub(arg, -5) == ":paid" then
+		arg = string.sub(arg, 1, -6)
+		if not last_take_ok[npc:id()] then
+			append_event({ type = "act_done", action = action, ok = false, reason = "not paid" })
+			return
+		end
+	end
+	if kind == "emote" then
+		local ok, done, why = pcall(play_emote, npc, arg)
+		append_event({ type = "act_done", action = action, ok = (ok and done) and true or false,
+			reason = (not ok) and tostring(done) or why })
+		return
+	end
+	if kind == "mouth" then return talk_mouth(npc, arg) end
+	if kind == "paidby" then  -- another NPC pays him for the job (money moves between them, never yours)
+		local from_id, amount = string.match(arg, "^(%d+):(%d+)$")
+		local payer = from_id and level.object_by_id(tonumber(from_id))
+		local done = false
+		if payer and payer:alive() then
+			amount = math.min(tonumber(amount), payer:money())
+			if amount > 0 then payer:transfer_money(amount, npc); done = true end
+		end
+		append_event({ type = "act_done", action = action, ok = done })
+		return
+	end
+	if kind == "item" then
+		local done = give_item(npc, arg)
+		append_event({ type = "act_done", action = action, ok = done and true or false })
+		return
+	end
+	if kind == "buy" then  -- "buy:medkit:300": he buys your item and pays you
+		local done, why = buy_from_actor(npc, arg)
+		append_event({ type = "act_done", action = action, ok = done and true or false, reason = why,
+			money = db.actor:money() })
+		return
+	end
+	if kind == "take" or kind == "give" then
+		local done = money_action(npc, kind, arg)
+		append_event({ type = "act_done", action = action, ok = done and true or false, money = db.actor:money() })
+		return
+	end
+	local ok, story = pcall(function() return get_object_story_id(npc_id) end)
+	if ok and story ~= nil then return end
+	if kind == "kill" then
+		local done = contract_kill(npc, tonumber(arg))
+		append_event({ type = "act_done", action = action, ok = done and true or false })
+		return
+	end
+	if action == "hostile" then
+		pcall(stop_follow, npc)
+		npc:set_relation(game_object.enemy, db.actor)
+		add_grudge(npc, db.actor)  -- he really opens fire, even inside a base
+		pcall(function() npc:make_object_visible_somewhen(db.actor) end)
+	elseif action == "follow" then
+		local okf, err = pcall(start_follow, npc)
+		if not okf then log_error("follow: " .. tostring(err)) end
+	elseif action == "stay" then
+		local oks2, err = pcall(stop_follow, npc)
+		if not oks2 then log_error("stay: " .. tostring(err)) end
+	elseif action == "calm" then
+		if grudges[npc:id()] then grudges[npc:id()][db.actor:id()] = nil end
+		npc:set_relation(game_object.neutral, db.actor)
+	elseif action == "friend" then
+		if grudges[npc:id()] then grudges[npc:id()][db.actor:id()] = nil end
+		npc:set_relation(game_object.friend, db.actor)
+	end
+end
+
+local function outfit_of(obj)
+	local ok, outfit = pcall(function() return obj:get_current_outfit() end)
+	return ok and outfit and outfit:section() or nil
+end
+
+local function is_stalker(obj)
+	return obj and IsStalker(obj) and obj:id() ~= db.actor:id()
+end
+
+function append_event(ev)  -- forward-declared local (used by actions above)
+	ev.t = time_global()
+	ev.level = level.name()
+	local f = io.open(path("events.jsonl"), "a")
+	if f then f:write(to_json(ev) .. "\n"); f:close() end
+end
+
+-- ------------------------------------------------------------- tasks and trade (for quest/trade talk)
+local function item_title(sec)
+	local ok, name = pcall(function() return game.translate_string(system_ini():r_string(sec, "inv_name")) end)
+	return ok and name or nil
+end
+
+local tasks_cache, tasks_at = nil, 0
+local function active_tasks()
+	local now = time_global()
+	if tasks_cache and now < tasks_at then return tasks_cache end
+	local list = { __array = true }
+	pcall(function()
+		for _, t in pairs(task_manager.get_task_manager().task_info) do
+			local title = t.current_title and game.translate_string(t.current_title)
+			if title and title ~= "" then
+				table.insert(list, (t.status == "selected" and "* " or "") .. title)
+			end
+		end
+	end)
+	tasks_cache, tasks_at = list, now + 5000
+	return list
+end
+
+-- What a trader has on him: names, count and base price. Cached, it doesn't change every second.
+local function trader_stock(npc)
+	local id, now = npc:id(), time_global()
+	local c = stock_cache[id]
+	if c and now < c.at then return c.list end
+	local counts, order = {}, {}
+	npc:iterate_inventory(function(_, item)
+		local sec = item:section()
+		if not counts[sec] then counts[sec] = 0; table.insert(order, sec) end
+		counts[sec] = counts[sec] + 1
+	end, npc)
+	local list = { __array = true }
+	for _, sec in ipairs(order) do
+		if #list >= 30 then break end
+		local name = item_title(sec)
+		if name and name ~= "" then
+			local okc, cost = pcall(function() return system_ini():r_u32(sec, "cost") end)
+			table.insert(list, name .. " x" .. counts[sec] .. ((okc and cost) and (" ~" .. cost) or "") .. " #" .. sec)
+		end
+	end
+	stock_cache[id] = { at = now + 20000, list = list }
+	return list
+end
+
+-- What the player could sell: his backpack, without what he wears or holds in a slot, quest items, PDA and bolts.
+local NOT_FOR_SALE = { bolt = true, device_pda = true, device_torch = true, wpn_binoc = false }
+local actor_stock_cache = nil
+
+local function equipped_ids(actor)
+	local ids = {}
+	for slot = 0, 12 do
+		local ok, item = pcall(function() return actor:item_in_slot(slot) end)
+		if ok and item then ids[item:id()] = true end
+	end
+	local ok, outfit = pcall(function() return actor:get_current_outfit() end)
+	if ok and outfit then ids[outfit:id()] = true end
+	local active = actor:active_item()
+	if active then ids[active:id()] = true end
+	return ids
+end
+
+local function sellable(actor, item, equipped)
+	local sec = item:section()
+	if NOT_FOR_SALE[sec] or equipped[item:id()] then return false end
+	local okq, quest = pcall(function()
+		local ini = system_ini()
+		return ini:line_exist(sec, "quest_item") and ini:r_bool(sec, "quest_item")
+	end)
+	return not (okq and quest)
+end
+
+local function actor_stock()
+	local now = time_global()
+	if actor_stock_cache and now < actor_stock_cache.at then return actor_stock_cache.list end
+	local actor = db.actor
+	local equipped = equipped_ids(actor)
+	local counts, order = {}, {}
+	actor:iterate_inventory(function(_, item)
+		if not sellable(actor, item, equipped) then return end
+		local sec = item:section()
+		if not counts[sec] then counts[sec] = 0; table.insert(order, sec) end
+		counts[sec] = counts[sec] + 1
+	end, actor)
+	local list = { __array = true }
+	for _, sec in ipairs(order) do
+		if #list >= 30 then break end
+		local name = item_title(sec)
+		if name and name ~= "" then
+			local okc, cost = pcall(function() return system_ini():r_u32(sec, "cost") end)
+			table.insert(list, name .. " x" .. counts[sec] .. ((okc and cost) and (" ~" .. cost) or "") .. " #" .. sec)
+		end
+	end
+	actor_stock_cache = { at = now + 3000, list = list }
+	return list
+end
+
+local function safe_actor_stock()
+	local ok, list = pcall(actor_stock)
+	if ok then return list end
+	log_error("actor_stock: " .. tostring(list))
+	return nil
+end
+
+local trading_near = false  -- someone who could trade is standing next to the player (set by write_state)
+
+-- He buys one item from the player: the item and the money move together, or nothing happens.
+function buy_from_actor(npc, arg)
+	local section, price = string.match(arg or "", "^(.+):(%d+)$")
+	price = tonumber(price)
+	if not section or not price or price <= 0 or price > 100000 then return false, "bad deal" end
+	local actor = db.actor
+	local equipped, found = equipped_ids(actor), nil
+	actor:iterate_inventory(function(_, item)
+		if not found and item:section() == section and sellable(actor, item, equipped) then found = item end
+	end, actor)
+	if not found then return false, "player has no " .. section end
+	if npc:money() < price then return false, "npc has only " .. npc:money() end
+	actor:transfer_item(found, npc)
+	npc:transfer_money(price, actor)
+	actor_stock_cache, stock_cache[npc:id()] = nil, nil
+	pcall(news_manager.relocate_item, actor, "out", section)
+	money_news("in", price)
+	return true
+end
+
+local function sells(npc, info)
+	if info.community == "trader" then return true end
+	if not info.story then return false end
+	local ok, on = pcall(function() return npc:is_trade_enabled() end)
+	return ok and on
+end
+
+-- ------------------------------------------------------------- state
+local function link_ids()  -- NPCs that show a viewer label now (the app re-sends any it misses)
+	local ids = { __array = true }
+	for id in pairs(twitch_links or {}) do table.insert(ids, id) end
+	return ids
+end
+
+local function write_state()
+	local actor = db.actor
+	local apos = actor:position()
+	local npcs = { __array = true }
+	local mutants = { __array = true }
+	trading_near = false
+	for id, st in pairs(db.storage) do
+		local obj = level.object_by_id(id)
+		if is_stalker(obj) and obj:alive() then
+			local d = obj:position():distance_to(apos)
+			if d < 40 then
+				local info = npc_info(obj)
+				if (d < 6 and sells(obj, info)) or d < 4 then  -- traders, and anyone you stand next to
+					local okt, stock = pcall(trader_stock, obj)
+					if okt then info.stock = stock end
+					local okm, money = pcall(function() return obj:money() end)
+					if okm then info.money = money end  -- what he could pay you for your goods
+					trading_near = true
+				end
+				table.insert(npcs, info)
+			end
+		elseif obj and IsMonster(obj) and obj:alive() then
+			local d = obj:position():distance_to(apos)
+			if d < 50 then table.insert(mutants, mutant_info(obj, apos)) end
+		end
+	end
+	table.sort(npcs, function(a, b) return a.dist < b.dist end)
+	while #npcs > 10 do table.remove(npcs) end
+	table.sort(mutants, function(a, b) return a.dist < b.dist end)
+	while #mutants > 6 do table.remove(mutants) end
+	local near = {}
+	for _, n in ipairs(npcs) do near[n.id] = true end
+	local okf, far_list = pcall(far_stalkers, near)
+	if not okf then log_error("far: " .. tostring(far_list)); far_list = nil end
+
+	local target = level.get_target_obj and level.get_target_obj()
+	local state = {
+		t = time_global(), level = level.name(), mod_version = MOD_VERSION, twitch_links = link_ids(),
+		hours = level.get_time_hours(), minutes = level.get_time_minutes(),
+		weather = level.get_weather(), emission = emission_active(),
+		actor_sheltered = emission_active() and in_cover(actor:position()) or nil,
+		actor = { name = actor:character_name(), health = actor.health, money = actor:money(),
+			weapon = weapon_of(actor), outfit = outfit_of(actor), talking = actor:is_talking(),
+			stock = trading_near and safe_actor_stock() or nil },  -- only next to someone who could buy
+		target_id = (target and is_stalker(target)) and target:id() or nil,
+		npcs = npcs,
+		far = far_list,
+		mutants = mutants,
+		tasks = active_tasks(),
+	}
+	local tmp = path("state.tmp")
+	local f = io.open(tmp, "w")
+	if f then
+		f:write(to_json(state)); f:close()
+		os.remove(path("state.json"))
+		os.rename(tmp, path("state.json"))
+	end
+end
+
+-- ------------------------------------------------------------- on-screen lines
+-- Bottom status line (listening / thinking) and subtitles, in HUD slots the single-player game leaves free.
+local STATUS_SLOT = "mp_pressjump"
+local SUB_SLOT = "cs_subtitles"
+local LISTEN_TEXT = string.char(209, 235, 243, 245, 224, 254, 46, 46, 46)  -- "listening..." in cp1251 Ukrainian
+local THINK_TEXT = string.char(196, 243, 236, 224, 186, 46, 46, 46)        -- "thinking..."
+local status_until, sub_until = 0, 0
+-- Twitch viewers linked to NPCs: looking at one shows "Name [nickname]" just above the crosshair.
+local LINK_SLOT = "mp_round_result"
+twitch_links = {}  -- npc id -> viewer nickname (global: write_state reports it)
+local link_shown, next_link_check = nil, 0
+
+local function set_static(slot, text)
+	local hud = get_hud()
+	if not hud then return end
+	if not text or text == "" then
+		hud:RemoveCustomStatic(slot)
+		return
+	end
+	local st = hud:GetCustomStatic(slot)
+	if not st then
+		hud:AddCustomStatic(slot, true)
+		st = hud:GetCustomStatic(slot)
+	end
+	if st and not pcall(function() st:wnd():TextControl():SetTextST(text) end) then
+		st:wnd():SetTextST(text)
+	end
+end
+
+local function set_status(text, ms)
+	pcall(set_static, STATUS_SLOT, text)
+	status_until = (text and text ~= "" and ms) and (time_global() + ms) or 0
+end
+
+local function show_subtitle(npc_id, text)
+	local npc = npc_id and level.object_by_id(npc_id)
+	local who = npc and npc:character_name() or db.actor:character_name()
+	pcall(set_static, SUB_SLOT, who .. ": " .. text)
+	sub_until = time_global() + math.min(12000, math.max(2500, string.len(text) * 65))
+end
+
+-- ------------------------------------------------------------- inbox (AI replies)
+local function show_line(npc_id, text, caption, showtime)
+	local npc = npc_id and level.object_by_id(npc_id)
+	local icon = "ui_inGame2_Hero"
+	caption = caption or ""
+	if npc then
+		caption = npc:character_name()
+		local ok, ic = pcall(function() return npc:character_icon() end)
+		if ok and ic then icon = ic end
+	end
+	db.actor:give_game_news(caption, text, icon, 0, showtime or 9000, 0)
+end
+
+local function read_inbox()
+	-- Rename first, then read: a line the app appends while we read would otherwise be deleted unread.
+	-- If the app is writing right now the rename fails, and we simply try again in 200 ms.
+	local name, taken = path("inbox.txt"), path("inbox.read")
+	if not os.rename(name, taken) then return end
+	local f = io.open(taken, "r")
+	if not f then return end
+	local body = f:read("*a")
+	f:close()
+	os.remove(taken)
+	for line in string.gmatch(body, "[^\n]+") do
+		local kind, id, text = string.match(line, "^(%w+)|(%-?%d*)|(.*)$")
+		if kind == "say" then show_line(tonumber(id), text)
+		elseif kind == "you" then show_line(nil, text, db.actor:character_name())
+		elseif kind == "info" then show_line(nil, text, "StalkerTalker", 3000)
+		elseif kind == "sub" then show_subtitle(tonumber(id), text)
+		elseif kind == "status" then set_status(text, 15000)
+		elseif kind == "link" then  -- "link|<npc id>|<nickname>"; an empty nickname removes the link
+			local npc_id = tonumber(id)
+			if npc_id then twitch_links[npc_id] = (text ~= "" and text) or nil end
+			link_shown = false  -- redraw the label
+		elseif kind == "twitch" then
+			local nick, msg = string.match(text, "^(.-): (.*)$")  -- viewer's nickname as the PDA caption
+			show_line(nil, msg or text, (nick or "Twitch") .. " (Twitch)", 9000)
+		elseif kind == "act" then
+			local ok, err = pcall(do_action, tonumber(id), text)
+			if not ok then log_error("act " .. text .. ": " .. tostring(err)) end
+		end
+	end
+end
+
+-- ------------------------------------------------------------- keys (OpenXRay key callbacks)
+-- Push-to-talk is caught here, so it only works while you're actually in the game. The companion app
+-- reads talker\keys.txt; the "Слухаю..." line sits at the bottom of the screen while the key is held.
+local keys = nil
+local keys_owner = nil
+local talking = false
+local talk_since = 0
+
+local function key_code(name)
+	local ok, code = pcall(function() return DIK_keys[name] end)
+	return ok and code or nil
+end
+
+local function load_keys()
+	keys = { talk = key_code("DIK_T"), follow = key_code("DIK_Y"), stay = key_code("DIK_U") }
+	local ok, ini = pcall(ini_file, "scripts\\talker.ltx")
+	if ok and ini and ini:section_exist("keys") then
+		for _, what in ipairs({ "talk", "follow", "stay" }) do
+			if ini:line_exist("keys", what) then
+				local name = ini:r_string("keys", what)
+				keys[what] = (name ~= "" and name ~= "none") and key_code(name) or nil
+			end
+		end
+	end
+end
+
+local function write_key(what)
+	local f = io.open(path("keys.txt"), "a")
+	if f then f:write(what .. "\n"); f:close() end
+end
+
+
+-- Who a hotkey order goes to: the stalker under the crosshair, else the nearest non-enemy within 7 m.
+local function order_target()
+	local target = level.get_target_obj and level.get_target_obj()
+	local apos = db.actor:position()
+	if target and is_stalker(target) and target:alive() and target:position():distance_to(apos) < 15 then
+		return target
+	end
+	local best, best_d = nil, 7
+	for id, _ in pairs(db.storage) do
+		local obj = level.object_by_id(id)
+		if is_stalker(obj) and obj:alive() and relation_name(obj) ~= "enemy" then
+			local d = obj:position():distance_to(apos)
+			if d < best_d then best, best_d = obj, d end
+		end
+	end
+	return best
+end
+
+local function hotkey_order(order)
+	local npc = order_target()
+	if not npc then return end
+	local ok, story = pcall(function() return get_object_story_id(npc:id()) end)
+	local refused = (ok and story ~= nil) or relation_name(npc) == "enemy"
+	local was_following = followers[npc:id()] and true or false
+	if not refused then do_action(npc:id(), order) end
+	append_event({ type = "order", order = order, npc = npc_info(npc), refused = refused,
+		changed = (not refused) and (was_following ~= (order == "follow")) })
+end
+
+local function ui_open()
+	local ok, ui = pcall(function() return level.main_input_receiver() end)
+	return ok and ui ~= nil
+end
+
+local function on_key_press(key)
+	if not keys or not db.actor then return end
+	if key == keys.talk then
+		-- allowed in the dialog window with an NPC, ignored while typing in other menus
+		if ui_open() and not db.actor:is_talking() then return end
+		talking, talk_since = true, time_global()  -- a repeat press is fine: the app ignores it
+		write_key("ptt_down")
+		set_status(LISTEN_TEXT)
+	elseif ui_open() then
+		return
+	elseif key == keys.follow then
+		hotkey_order("follow")
+	elseif key == keys.stay then
+		hotkey_order("stay")
+	end
+end
+
+local function on_key_release(key)
+	if keys and key == keys.talk and talking then
+		talking = false
+		write_key("ptt_up")
+		set_status(THINK_TEXT, 15000)  -- the app clears it when the answer starts
+	end
+end
+
+local event_cooldown = {}
+local function event_once(kind, ms, ev)
+	local now = time_global()
+	if (event_cooldown[kind] or 0) > now then return end
+	event_cooldown[kind] = now + ms
+	ev.type = kind
+	append_event(ev)
+end
+
+local function on_actor_hit(obj, amount, dir, who)
+	if not who or not amount or amount < 0.02 or who:id() == db.actor:id() then return end
+	if IsStalker(who) or IsMonster(who) then return end
+	event_once("anomaly_hit", 15000, { kind = who:section() })  -- burnt, shocked... by an anomaly
+end
+
+-- The actor object is new after every load, so the callbacks are (re)attached from update().
+local function register_keys()
+	if keys_owner == db.actor then return end
+	keys_owner = db.actor
+	talking = false
+	os.remove(path("events.jsonl"))  -- old events mean nothing after a load (the app restarts from 0)
+	load_keys()
+	db.actor:set_callback(callback.key_press, function(key) safe(on_key_press, key) end)
+	db.actor:set_callback(callback.hit, function(...) safe(on_actor_hit, ...) end)
+	if callback.weapon_jammed then
+		db.actor:set_callback(callback.weapon_jammed, function() safe(event_once, "jam", 10000, {}) end)
+	end
+	if callback.weapon_magazine_empty then
+		db.actor:set_callback(callback.weapon_magazine_empty, function() safe(event_once, "mag_empty", 15000, {}) end)
+	end
+	if callback.key_release then
+		db.actor:set_callback(callback.key_release, function(key) safe(on_key_release, key) end)
+		write_key("game_keys")  -- tells the companion app that push-to-talk now comes from the game
+	else
+		keys.talk = nil  -- older engine without key release: the app keeps its own keyboard hook
+	end
+end
+
+-- ------------------------------------------------------------- testing helper
+-- talker\dev_money.txt holding a number tops your money up to it (the game's limit is 2147483647), once.
+local next_dev_check = 0
+local function dev_money()
+	local f = io.open(path("dev_money.txt"), "r")
+	if not f then return end
+	local want = tonumber(f:read("*a"))
+	f:close()
+	os.remove(path("dev_money.txt"))
+	if not want then return end
+	want = math.min(math.floor(want), 2000000000)
+	local add = want - db.actor:money()
+	if add > 0 then
+		db.actor:give_money(add)
+		pcall(news_manager.relocate_money, db.actor, "in", add)
+	end
+	append_event({ type = "act_done", action = "dev_money:" .. want, ok = true, money = db.actor:money() })
+end
+
+-- ------------------------------------------------------------- hooks
+local function update_link_label()
+	local target = level.get_target_obj and level.get_target_obj()
+	local nick = target and twitch_links[target:id()]
+	if nick and not target:alive() then twitch_links[target:id()] = nil; nick = nil end
+	local text = nick and (target:character_name() .. " [" .. nick .. "]") or nil
+	if text ~= link_shown then
+		link_shown = text
+		set_static(LINK_SLOT, text)
+	end
+end
+
+function update(delta)
+	if not db.actor then return end
+	if keys_owner ~= db.actor then
+		local ok, err = pcall(register_keys)
+		if not ok then log_error("keys: " .. tostring(err)) end
+	end
+	local now = time_global()
+	if talking and now - talk_since > 30000 then on_key_release(keys.talk) end  -- release never came
+	if status_until > 0 and now > status_until then set_status(nil) end
+	if sub_until > 0 and now > sub_until then sub_until = 0; pcall(set_static, SUB_SLOT, nil) end
+	if now >= next_link_check and (next(twitch_links) or link_shown ~= nil) then
+		next_link_check = now + 150
+		local ok, err = pcall(update_link_label)
+		if not ok then log_error("link label: " .. tostring(err)); link_shown = nil end
+	end
+	if next(contracts) or next(grudges) then pcall(update_contracts) end
+	if next(emotes) then
+		local ok, err = pcall(update_emotes)
+		if not ok then log_error("emotes: " .. tostring(err)) end
+	end
+	if now >= next_dev_check then
+		next_dev_check = now + 2000
+		local ok, err = pcall(dev_money)
+		if not ok then log_error("dev_money: " .. tostring(err)) end
+	end
+	if now >= next_state_write then
+		next_state_write = now + 500
+		local ok, err = pcall(write_state)
+		if not ok then log_error("state: " .. tostring(err)) end
+	end
+	if now >= next_inbox_check then
+		next_inbox_check = now + 200
+		local ok, err = pcall(read_inbox)
+		if not ok then log_error("inbox: " .. tostring(err)) end
+	end
+end
+
+function on_npc_death(victim, who)
+	if victim then twitch_links[victim:id()] = nil end  -- a dead man speaks for nobody
+	if not db.actor or not victim then return end
+	local near = victim:position():distance_to(db.actor:position()) < 60
+	local by_actor = who and who:id() == db.actor:id()
+	if not (near or by_actor) then return end
+	local killer = nil
+	if by_actor then killer = { id = db.actor:id(), name = "actor" }
+	elseif who and is_stalker(who) then killer = npc_info(who)
+	elseif who then killer = { id = who:id(), name = who:name() } end
+	local v = npc_info(victim)
+	v.alive = false
+	append_event({ type = "death", victim = v, killer = killer, by_actor = by_actor })
+end
+
+function on_npc_hit(npc, amount, who)
+	if not db.actor or not npc or not who or amount <= 0 then return end
+	if who:id() ~= db.actor:id() then
+		pcall(on_feud_hit, npc, who)
+		return
+	end
+	local now = time_global()
+	if (hit_cooldown[npc:id()] or 0) > now then return end
+	hit_cooldown[npc:id()] = now + 5000
+	append_event({ type = "actor_hit_npc", npc = npc_info(npc), amount = amount })
+end
+
+function on_npc_use(npc, who)
+	if not db.actor or not npc or not who or who:id() ~= db.actor:id() then return end
+	append_event({ type = "actor_use_npc", npc = npc_info(npc) })
+end
+
+function on_item_take(obj)
+	if not db.actor or not obj or not isArtefact(obj) then return end
+	append_event({ type = "artifact", name = item_title(obj:section()) or obj:section() })
+end
+
+function on_actor_spawn()
+	append_event({ type = "game_loaded" })
+end
+
+-- Safe wrappers for the hook lines in bind_stalker / xr_motivator
+function safe(fn, ...)
+	local ok, err = pcall(fn, ...)
+	if not ok then log_error(err) end
+end

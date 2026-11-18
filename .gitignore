@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Private: keys, logins, per-player data
+.env
+twitch_token.json
+memory.json
+memory.json.tmp
+usage.json
+logs/*
+!logs/.keep
+
+# Game data (copyrighted: unpacked scripts, voice samples) and build output
+original/
+samples/
+clips/
+dist/
+backup_before_merge/
+
+# Test and debug output
+test_*.txt
+mem_dump.txt
+places_out.txt
+probe_result.txt
