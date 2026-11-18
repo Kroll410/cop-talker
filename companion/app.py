@@ -18,6 +18,13 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFormLayout, QHBoxLayout
 ROOT = Path(__file__).resolve().parent.parent
 SETTINGS = ROOT / "settings.ini"
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from settings_file import ensure_settings  # noqa: E402  (settings.ini from the example, plus new options)
+
+try:
+    SETTINGS_NOTE = ensure_settings(ROOT)
+except Exception as exc:  # never keep the window from opening
+    SETTINGS_NOTE = f"settings.ini check failed: {exc!r}"
 
 
 def setting(key, default=""):
@@ -183,6 +190,11 @@ class Window(QMainWindow):
         self.toggle.clicked.connect(self.toggle_run)
         install = QPushButton("Reinstall game mod")
         install.clicked.connect(self.install_mod)
+        update = QPushButton("Update")
+        update.setToolTip("Gets the newest StalkerTalker from GitHub (git pull), adds new settings to your "
+                          "settings.ini, reinstalls the game mod if it changed and restarts.\n"
+                          "Your settings.ini, .env and NPC memories are never touched.")
+        update.clicked.connect(self.update_self)
         folder = QPushButton("Game logs")
         folder.clicked.connect(lambda: os.startfile(GAME_DIR / "talker"))
         self.mode = QPushButton()
@@ -193,6 +205,7 @@ class Window(QMainWindow):
         top.addStretch()
         top.addWidget(self.mode)
         top.addWidget(folder)
+        top.addWidget(update)
         top.addWidget(install)
         top.addWidget(self.toggle)
 
@@ -258,6 +271,8 @@ class Window(QMainWindow):
         lay.addWidget(self.usage)
         self.setCentralWidget(body)
         self.show_mode()
+        if SETTINGS_NOTE:
+            self.append(SETTINGS_NOTE)
         self.start()
 
     # ------------------------------------------------------------ helper process
@@ -397,6 +412,76 @@ class Window(QMainWindow):
         msg = (r.stdout + r.stderr).strip() or "done"
         self.append(msg)
         QMessageBox.information(self, "StalkerTalker", msg + "\n\nLoad a save in the game to pick up the changes.")
+
+    # ------------------------------------------------------------ self-update
+    def git(self, *args, timeout=120):
+        """Run git in the StalkerTalker folder (no console window). Returns (ok, output)."""
+        try:
+            r = subprocess.run(["git", *args], cwd=str(ROOT), capture_output=True, text=True, timeout=timeout,
+                               encoding="utf-8", errors="replace",
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return False, str(exc)
+        return r.returncode == 0, (r.stdout + r.stderr).strip()
+
+    def update_self(self):
+        """git pull, then whatever the update needs: new settings, packages, game mod, a restart."""
+        if not (ROOT / ".git").exists():
+            QMessageBox.information(self, "StalkerTalker", "This copy wasn't installed with git, so it can't update "
+                                    "itself.\n\nDownload the new version from github.com/Kroll410/cop-talker "
+                                    "(Code → Download ZIP) and unpack it over this folder; your settings.ini, .env "
+                                    "and memories stay.")
+            return
+        ok, before = self.git("rev-parse", "HEAD")
+        if not ok:
+            QMessageBox.warning(self, "StalkerTalker", f"git isn't available here:\n{before}")
+            return
+        self.append("— updating from GitHub —")
+        was_running = self.proc is not None
+        self.stop()
+        ok, out = self.git("pull", "--ff-only")
+        self.append(out or "(no output)")
+        if not ok:
+            QMessageBox.warning(self, "StalkerTalker", "Update failed:\n\n" + out[-800:] + "\n\nIf it says your "
+                                "local changes would be overwritten, you changed StalkerTalker's own files here.")
+            if was_running:
+                self.start()
+            return
+        _, after = self.git("rev-parse", "HEAD")
+        if after == before:
+            if "up to date" not in out.lower():
+                self.append("Already up to date.")
+            if was_running:
+                self.start()
+            return
+        _, changed = self.git("diff", "--name-only", before, after)
+        changed = changed.splitlines()
+        done = [f"Updated: {before[:7]} → {after[:7]} ({len(changed)} files)"]
+        note = ensure_settings(ROOT)
+        if note:
+            done.append(note)
+        if "requirements.txt" in changed:
+            self.append("Updating Python packages (a minute)...")
+            r = subprocess.run([str(PYTHON), "-m", "pip", "install", "-q", "-r", str(ROOT / "requirements.txt")],
+                               capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            done.append("Python packages updated" if r.returncode == 0 else "Package update failed: "
+                        + (r.stderr or r.stdout).strip()[-300:])
+        if any(f.startswith("mod/") for f in changed):
+            r = subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "install_mod.ps1")],
+                               capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            done.append("Game mod reinstalled: LOAD A SAVE in the game to use it" if r.returncode == 0
+                        else "Game mod install failed: " + (r.stdout + r.stderr).strip()[-300:])
+        for line in done:
+            self.append(line)
+        if "companion/app.py" in changed or "companion/settings_file.py" in changed:
+            QMessageBox.information(self, "StalkerTalker", "\n".join(done) + "\n\nThe window itself was updated: "
+                                    "it restarts now.")
+            subprocess.Popen([str(ROOT / ".venv" / "Scripts" / "pythonw.exe"), str(ROOT / "companion" / "app.py")],
+                             cwd=str(ROOT))
+            QApplication.quit()
+            return
+        QMessageBox.information(self, "StalkerTalker", "\n".join(done))
+        self.start()
 
     def closeEvent(self, event):
         self.stop()

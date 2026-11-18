@@ -36,6 +36,14 @@ MEMORY_FILE = ROOT / "memory.json"
 
 def load_env():
     # settings.ini: everyday options (the app's Settings tab edits it); .env: keys and voice IDs.
+    # settings.ini is made from settings.example.ini if missing, and gets options an update added.
+    try:
+        from settings_file import ensure_settings
+        note = ensure_settings(ROOT)
+        if note:
+            print(note, file=sys.stderr)
+    except Exception as exc:
+        print(f"settings.ini check failed: {exc!r}", file=sys.stderr)
     # A line without its own "NAME=" continues the setting above it (a long PLAYER_BIO over several lines);
     # anything else odd is skipped with a warning, never fatal.
     for name in ("settings.ini", ".env"):

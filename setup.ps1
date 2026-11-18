@@ -41,6 +41,8 @@ Say "ok"
 # 3. Game folder
 Say "`n[3/6] Game folder" Cyan
 $game = ''
+# settings.ini is your own copy (not in git); it starts as settings.example.ini
+if (-not (Test-Path settings.ini)) { Copy-Item settings.example.ini settings.ini }
 $line = Get-Content settings.ini -Encoding UTF8 | Where-Object { $_ -match '^\s*STALKER_DIR\s*=' } | Select-Object -First 1
 if ($line) { $game = ($line -split '=', 2)[1].Trim() }
 if (-not (Test-Path (Join-Path $game 'bin'))) {

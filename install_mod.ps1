@@ -2,7 +2,9 @@
 # The game folder is STALKER_DIR in settings.ini. Re-run after changing anything in mod\. Remove with uninstall_mod.ps1
 $ErrorActionPreference = 'Stop'
 $game = 'C:\Games\S.T.A.L.K.E.R. Call of Pripyat'
-$line = Get-Content (Join-Path $PSScriptRoot 'settings.ini') -Encoding UTF8 -ErrorAction SilentlyContinue |
+$ini = Join-Path $PSScriptRoot 'settings.ini'
+if (-not (Test-Path $ini)) { Copy-Item (Join-Path $PSScriptRoot 'settings.example.ini') $ini }  # your copy, not in git
+$line = Get-Content $ini -Encoding UTF8 -ErrorAction SilentlyContinue |
     Where-Object { $_ -match '^\s*STALKER_DIR\s*=' } | Select-Object -First 1
 if ($line) { $game = ($line -split '=', 2)[1].Trim() }
 if (-not (Test-Path (Join-Path $game 'gamedata')) -and -not (Test-Path (Join-Path $game 'bin'))) {

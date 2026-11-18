@@ -81,11 +81,13 @@ To connect Twitch:
 
 ## Updating and removing
 
-After changing anything in `mod\`, run `install_mod.ps1` and reload your save, since the game only reads scripts on load. The app tells you if the game is still running an older script.
+If you installed with `git clone`, update with the **Update** button in the window. It runs `git pull`, adds new options to your `settings.ini`, reinstalls the mod in the game if needed and restarts. Your `settings.ini`, `.env` and NPC memory are never touched.
+
+After the mod changes, reload your save, since the game only reads scripts on load. The app tells you if the game is still running an older script.
 
 To remove the mod from the game, run `uninstall_mod.ps1`.
 
-`.env`, logs, NPC memory and the Twitch token stay out of the repo. Don't share your `.env`.
+`settings.ini` (your settings, made from `settings.example.ini`), `.env`, logs, NPC memory and the Twitch token stay out of the repo. Don't share your `.env`.
 
 ## License
 
