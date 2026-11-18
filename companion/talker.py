@@ -1059,9 +1059,15 @@ def drop_own_name(line, npc):
     fixed = re.sub(r",\s*" + name + r"(?=\s*[,.!?…]|\s*$)", "", fixed, flags=re.I)
     # "Борода каже, що..." from Борода himself: talking about himself as of someone else. Drop that sentence,
     # unless he is saying who he is ("Вовк мене звати", "я Вовк").
+    # "..., Борода каже, що його люди..." -> "..., його люди...": drop the "<own name> says (that)" bit
+    said_verbs = r"(каже|кажe|говорить|сказав|казав|вважає|думає|знає|радить|бачить|чув)"
+    fixed = re.sub(r"(^|[,;:.!?…]\s*|(?<![^\W\d_])(?:а|і|й|та|бо)\s+)(\[[^\]]*\]\s*)?" + name + r"\s+" + said_verbs
+                   + r"(\s*[,:—–-]?\s*що)?\s*[,:—–-]?\s*", lambda m: m.group(1) + (m.group(2) or ""), fixed, flags=re.I)
+    fixed = re.sub(r"(^|[.!?…]\s+)([а-яіїєґ])", lambda m: m.group(1) + m.group(2).upper(), fixed)
     sentences = re.findall(r"[^.!?…]+[.!?…]*\s*", fixed)
+    intro = r"(звати|звуть|кличуть|(?<![^\W\d_])я\s*[—–-]?\s*" + name + r")"  # "Вовк мене звати", "я Вовк"
     keep = [x for x in sentences if not re.search(r"(?<![^\W\d_])" + name + r"(?![^\W\d_])", x, re.I)
-            or re.search(r"(?<![^\W\d_])(я|мене|мені|мій|моє|моя|мною|звати|звуть|кличуть)(?![^\W\d_])", x, re.I)]
+            or re.search(intro, x, re.I)]
     if keep and len(keep) < len(sentences):
         fixed = "".join(keep)
     return fixed.strip() or line
