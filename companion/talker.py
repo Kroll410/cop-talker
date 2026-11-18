@@ -2226,6 +2226,7 @@ class Talker:
         self.next_twitch_note = 0.0
         self.twitch_links = {}   # viewer nickname (lower case) -> id of the NPC who speaks for him
         self.twitch_names = {}   # lower case -> nickname as shown
+        self.load_links()        # kept in twitch_links.json across restarts
         self.next_link_sync = 0.0
         if TWITCH_ENABLED:
             from twitch import Twitch
@@ -2900,8 +2901,10 @@ class Talker:
         # Each viewer speaks through "his" NPC while that man is around; otherwise he gets a new one.
         link = self.twitch_links.get(user.lower())
         linked = next((n for n in npcs if link and n.get("id") == link), None)
-        if linked and linked not in named:
+        if linked:
+            # his own man always speaks for him, even if the words seem to name him ("бороду" vs Борода)
             npc = linked
+            named = [n for n in named if n is not linked]
         else:
             # Someone else says the message, so the named stalker isn't talking about himself; he answers after.
             taken = set(self.twitch_links.values())
@@ -2924,8 +2927,28 @@ class Talker:
                 del self.twitch_links[other]
         self.twitch_links[key] = npc["id"]
         self.twitch_names[key] = user
+        self.save_links()
         self.game.send("link", npc["id"], user)
         log(f"Twitch: {user} now speaks through {npc.get('name')}")
+
+    LINKS_FILE = ROOT / "twitch_links.json"
+
+    def load_links(self):
+        """Links survive a restart of StalkerTalker (the game keeps showing the labels anyway)."""
+        try:
+            data = json.loads(self.LINKS_FILE.read_text(encoding="utf-8"))
+            self.twitch_links = {k: int(v["id"]) for k, v in data.items()}
+            self.twitch_names = {k: v.get("nick", k) for k, v in data.items()}
+        except (OSError, ValueError, KeyError, TypeError):
+            self.twitch_links, self.twitch_names = {}, {}
+
+    def save_links(self):
+        try:
+            self.LINKS_FILE.write_text(json.dumps(
+                {k: {"id": i, "nick": self.twitch_names.get(k, k)} for k, i in self.twitch_links.items()},
+                ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError as exc:
+            log(f"Twitch links not saved: {exc}")
 
     def sync_links(self, state):
         """The game forgets the labels when a save loads: show them again for linked NPCs it doesn't know."""

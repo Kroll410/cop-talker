@@ -5,6 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "companion"))
 import talker  # noqa: E402
+import tempfile  # noqa: E402
+
+talker.Talker.LINKS_FILE = Path(tempfile.mkdtemp()) / "twitch_links.json"  # never the real one
 
 
 class FakeGame:
@@ -42,12 +45,24 @@ gone = [i for i in (1, 2, 3) if i != rest]
 new = say("Viewer1", "де ти", state(*gone))[1]
 assert new != first and t.twitch_links["viewer1"] != rest, "relinked when his NPC left"
 assert ("link", rest, "") in t.game.sent, "old label removed"
-# named NPC is his own man: someone else says it, link stays
+# the words name his own man: he still says it himself, and the link stays
 mine = t.twitch_links["viewer1"]
 r = say("Viewer1", f"{men[mine]['name']}, ти де був?", state(1, 2, 3))
-assert r[1] != men[mine]["name"] and r[2] == men[mine]["name"] and t.twitch_links["viewer1"] == mine
+assert r[1] == men[mine]["name"] and r[2] is None and t.twitch_links["viewer1"] == mine
 # sync: game forgot labels after a save load
 t.game.sent.clear()
 t.sync_links({"npcs": [men[1], men[2], men[3]], "twitch_links": []})
 assert {s[1] for s in t.game.sent} == set(t.twitch_links.values()), t.game.sent
 print("links ok:", t.twitch_links)
+
+# --- his own NPC speaks even if the words seem to name him ("бороду" vs Борода), and links survive a restart
+beard = {"id": 9, "name": "Борода", "dist": 4}
+t.twitch_links, t.twitch_names = {}, {}
+spoke.clear()
+say("Viewer3", "привіт", {"npcs": [beard]})
+r = say("Viewer3", "ох от би хто мені на бороду щось", {"npcs": [beard, men[1], men[2]]})
+assert r[1] == "Борода" and r[2] is None, r
+t2 = talker.Talker.__new__(talker.Talker)
+t2.load_links()
+assert t2.twitch_links.get("viewer3") == 9 and t2.twitch_names.get("viewer3") == "Viewer3", t2.twitch_links
+print("own NPC kept despite 'бороду'; links survive a restart")
