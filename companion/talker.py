@@ -324,7 +324,24 @@ QUESTION_WORDS = re.compile(r"\?|(?<!\w)(хто|що|шо|де|куди|звід
                             r"чий|чия|чиє|чи|хтось|є\s+хто)(?!\w)", re.I)
 GROUP_WORDS = re.compile(r"\b(всі|всім|всіх|усі|усім|усіх|пацани|пацанів|пацанам|пацанчики|хлопці|хлопців|хлопцям|"
                          r"сталкери|сталкерам|сталкерів|народ|народе|братва|братво|мужики|мужиків|мужикам|бродяги|"
-                         r"бродягам|братці|братани|братишки|друзі|панове|люди|кожен|кожному|хто-небудь|хтось)\b", re.I)
+                         r"бродягам|братці|братани|братишки|друзі|панове|люди|кожен|кожному|хто-небудь|хтось|"
+                         # slang, surzhyk, Russian and English ways to say "guys"
+                         r"гайз|гайс|гайзи|гайзики|гаюшки|guys|bros|броси|пацанва|пацанята|пацанятка|пацики|"
+                         r"хлопи|хлопаки|хлопчики|хлопчаки|ребята|рєбята|рибята|ребзя|ребятки|парні|парубки|"
+                         r"чуваки|чувачки|чуви|братухи|брателли|братики|братва|братани|кенти|корєші|кореші|друзяки|"
+                         r"мужичари|мужички|сталкерюги|сталкерки|колеги|земляки|громадо|товариство|народець|"
+                         r"всі присутні|усі присутні|шановні|дами і панове|бандюки|свободівці|довгарі|вояки)\b", re.I)
+# Plural "you" asking the people around: "ви чули...", "чули, що...", "хто з вас знає...", "у вас є..."
+PLURAL_YOU = re.compile(r"(?<!\w)(ви|вас|вам|вами)\s+(\w+\s+)?(чули|знаєте|знали|бачили|в курсі|не повірите|"
+                        r"уявляєте|пам'ятаєте|думаєте|хочете|маєте|будете|підете|чуєте|допоможете|скажете|"
+                        r"порадите|зможете|збираєтесь|бачите|розумієте)|(?<!\w)(хто|хтось|кому|кого)\s+(з|із|зі)\s+вас|"
+                        r"(?<!\w)у\s+вас\s+(тут\s+)?(є|був|була|було)|"
+                        r"^\W*(чули|знаєте|уявляєте|прикиньте|прикинь|слухайте|дивіться|гляньте|алло|ау)(?!\w)", re.I)
+
+
+def to_everyone(text):
+    """Said to the people around, not to one man: "пацани...", "гайз...", "ви чули...", "хто з вас..."."""
+    return bool(text) and bool(GROUP_WORDS.search(text) or PLURAL_YOU.search(text))
 
 
 def npc_brief(n):
@@ -2573,7 +2590,7 @@ class Talker:
                     self.game.send("you", None, text)
             else:
                 self.game.send("info", None, "Не розчув, спробуйте ще раз")
-            if text and GROUP_WORDS.search(text) and self.group_answer(state, text, "The player (a stalker)",
+            if text and to_everyone(text) and self.group_answer(state, text, "The player (a stalker)",
                                                                      from_player=True):
                 return  # "Пацани, ..." — several men around answered
             if not npc:
@@ -2883,7 +2900,7 @@ class Talker:
                         log(f"  {named.get('name')} answers: {reply}")
                         self.brain_gesture(named)
                         self.speak(named, reply, state, note=f"(to {npc.get('name')})")
-                elif GROUP_WORDS.search(text):  # "$Пацани, ..." — the others around answer him
+                elif to_everyone(text) or "?" in text:  # "$Пацани...", "$Гайз, ви чули...?": the others answer
                     time.sleep(0.4)
                     self.group_answer(state, strip_tags(line), npc.get("name"), exclude=npc.get("id"),
                                       speaker_npc=npc)
