@@ -335,7 +335,9 @@ FUN_RULE = FUN_RULES.get(FUN_LEVEL, FUN_RULES["high"])
 # Duty is always "Долг" and its men "долгівці", never the dub's "Обов'язок" / "обов'язківці". It goes into every
 # prompt that writes spoken lines (they all include FUN_RULE), and fix_factions() repairs anything that slips through.
 FUN_RULE += ("\n- The Duty faction is called only Долг (Долгу, Долгом), its men only долгівець / долгівці (долгівця, "
-             "долгівців, долгівцям). Never \"Обов'язок\" or \"обов'язківці\" for them.")
+             "долгівців, долгівцям). Never \"Обов'язок\" or \"обов'язківці\" for them."
+             "\n- Only Ukrainian letters: never ы, э, ъ, ё, even in a Russian word. Never talk about yourself by "
+             "your own name, as if about someone else.")
 SYSTEM_PROMPT = SYSTEM_PROMPT.format(tags=AUDIO_TAGS_RULE if EXPRESSIVE else "", fun=FUN_RULE)
 MONOLITH_PROMPT = MONOLITH_PROMPT.format(tags=MONOLITH_TAGS_RULE if EXPRESSIVE else "")
 
@@ -476,6 +478,14 @@ DUTY_MEN = re.compile(r"(?<![^\W\d_])(о)бов" + APOS + r"?язків(?=е?ц|
 DUTY_NAME = re.compile(r"(?<![^\W\d_])(?:Обов" + APOS + r"?яз(ок|ку|ком|кові|ка)|(?<=«)обов" + APOS
                        + r"?яз(ок|ку|ком|кові|ка))(?![^\W\d_])")
 DUTY_ENDINGS = {"ок": "", "ку": "у", "ком": "ом", "кові": "ові", "ка": "а"}
+
+
+RUSSIAN_LETTERS = str.maketrans({"ы": "и", "Ы": "И", "э": "е", "Э": "Е", "ъ": "'", "Ъ": "'", "ё": "йо", "Ё": "Йо"})
+
+
+def ukrainian_letters(text):
+    """"крыша" -> "криша": a Russian word slipped in. The voice reads Ukrainian letters; surzhyk stays surzhyk."""
+    return text.translate(RUSSIAN_LETTERS) if text else text
 
 
 def fix_factions(text):
@@ -1023,6 +1033,13 @@ def drop_own_name(line, npc):
                    + r"(?=\s*[,.!?…])", lambda m: m.group(1) + (m.group(2) or "") + m.group(3), fixed, flags=re.I)
     # "...ти хоч моргни, Кастете!" in the middle or at the end: drop ", Кастете"
     fixed = re.sub(r",\s*" + name + r"(?=\s*[,.!?…]|\s*$)", "", fixed, flags=re.I)
+    # "Борода каже, що..." from Борода himself: talking about himself as of someone else. Drop that sentence,
+    # unless he is saying who he is ("Вовк мене звати", "я Вовк").
+    sentences = re.findall(r"[^.!?…]+[.!?…]*\s*", fixed)
+    keep = [x for x in sentences if not re.search(r"(?<![^\W\d_])" + name + r"(?![^\W\d_])", x, re.I)
+            or re.search(r"(?<![^\W\d_])(я|мене|мені|мій|моє|моя|мною|звати|звуть|кличуть)(?![^\W\d_])", x, re.I)]
+    if keep and len(keep) < len(sentences):
+        fixed = "".join(keep)
     return fixed.strip() or line
 
 
@@ -2755,7 +2772,7 @@ class Talker:
         """Voice + subtitle of one line, the subtitle appearing right as the voice starts.
         note: also keep the line in his memory, e.g. "(to Лоцман)" (talks with the player are kept elsewhere).
         aside: a quieter mutter that may play over someone else's line. on_start() runs when the voice starts."""
-        line, pda_text = fix_factions(line), fix_factions(pda_text)
+        line, pda_text = (ukrainian_letters(fix_factions(t)) for t in (line, pda_text))
         plain = strip_tags(line)
         self.spoken.append((time.time(), plain))
         try:  # a news story he just told won't be offered again (unless it's big news)
