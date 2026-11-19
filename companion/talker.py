@@ -2834,10 +2834,19 @@ class Talker:
             thread.join(60)
 
     def gesture(self, npc, emote):
-        """Start a gesture (game script v6+) together with the words; None does nothing."""
-        if emote and npc and npc.get("id") is not None and not npc.get("wounded"):
-            self.game.send("act", npc["id"], f"emote:{emote}")
-            log(f"  ({npc.get('name')} gestures: {emote})")
+        """Start a gesture (game script v6+) together with the words; None does nothing. Not for a man who is
+        wounded or fighting right now (the game would refuse it anyway)."""
+        if not emote or not npc or npc.get("id") is None or npc.get("wounded"):
+            return
+        try:
+            now = next((n for n in (self.game.state() or {}).get("npcs", []) if isinstance(n, dict)
+                        and n.get("id") == npc["id"]), npc)
+        except Exception:
+            now = npc
+        if now.get("in_combat") or now.get("wounded"):
+            return
+        self.game.send("act", npc["id"], f"emote:{emote}")
+        log(f"  ({npc.get('name')} gestures: {emote})")
 
     def brain_gesture(self, npc):
         """The gesture the AI put in the line it just wrote for this NPC, if any."""
@@ -3064,7 +3073,7 @@ class Talker:
         action, extras = self.brain.last_action, list(self.brain.last_extras)
         for kind, arg in extras:  # gestures start together with the words
             if kind == "emote":
-                self.game.send("act", npc["id"], f"emote:{arg}")
+                self.gesture(npc, arg)
         # A bystander may butt in: his line is written while this one plays, and follows it at once.
         started, butt_in = threading.Event(), None
         if mode == "reply" and action not in ("warn", "hostile") and ASKS_STORY.search(player_text or "") \

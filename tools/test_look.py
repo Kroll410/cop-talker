@@ -54,6 +54,17 @@ ok &= check(int(hold.rsplit(":", 1)[1]) >= 3, f"held at least as long as he talk
 
 ok &= check(talker.Talker.MOD_VERSION == 13, "app expects game script v13")
 
+# gestures: never for a man who is fighting or wounded right now (the game refuses them: log noise)
+real_gesture = talker.Talker.gesture
+fighter, calm = {"id": 21, "name": "Різак"}, {"id": 22, "name": "Вобла"}
+t.game.state = lambda: {"npcs": [dict(fighter, in_combat=True), calm]}
+sent.clear()
+real_gesture(t, fighter, "threat")
+real_gesture(t, calm, "threat")
+real_gesture(t, dict(calm, wounded=True), "hello")
+ok &= check([x for x in sent if x[2].startswith("emote:")] == [("act", 22, "emote:threat")],
+            f"gesture only for the man not fighting: {sent}")
+
 # the game script itself, run in LuaJIT (lupa) with stubs for the engine
 lua_test = ROOT / "tools" / "look_lua.py"
 if lua_test.exists():
