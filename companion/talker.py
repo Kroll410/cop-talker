@@ -340,7 +340,7 @@ FUN_RULE += ("\n- The Duty faction is called only Долг (Долгу, Долг
              "долгівців, долгівцям). Never \"Обов'язок\" or \"обов'язківці\" for them."
              "\n- Only Ukrainian letters (never ы, э, ъ, ё), except for a bandit: he talks surzhyk, and his Russian "
              "words are written in Russian. Never talk about yourself by "
-             "your own name, as if about someone else."
+             "your own name, as if about someone else (but when asked who you are, say your name)."
              "\n- Fillers and swear words go anywhere in a sentence, the way people really talk: at the start, in the "
              "middle between words, as a pause before the point; not always tacked on at the end. Rotate them, "
              "don't lean on one: блін, бляха, бляха-муха, бля, блять, йопта, йо-майо, єбать, їбать-копать, хулі, "
@@ -1026,7 +1026,8 @@ def drop_narration(text, npc):
         line = line[:1].upper() + line[1:]
         if re.match(r"^\s*\(.*\)\s*$", line):  # "(сплюнув)" stage direction
             continue
-        if not kept and re.match(r"^\s*\(?" + name + r"\s+[а-яіїєґ]", line):
+        # ("Вовк я, вільний сталкер." / "Вовк мене звати" is him saying who he is, not narration)
+        if not kept and re.match(r"^\s*\(?" + name + r"\s+(?!(?:я|мене)(?![^\W\d_]))[а-яіїєґ]", line):
             # "Діма зітхає..." / "Діма йому не продасть...": narration about himself. Drop that sentence
             # (or the whole first line, if the words come on the next one).
             rest = re.sub(r"^[^.!?…]*[.!?…]+\s*", "", line, count=1)
@@ -1075,8 +1076,9 @@ def drop_own_name(line, npc):
     fixed = re.sub(r"(^|[.!?…]\s+)([а-яіїєґ])", lambda m: m.group(1) + m.group(2).upper(), fixed)
     sentences = re.findall(r"[^.!?…]+[.!?…]*\s*", fixed)
     intro = r"(звати|звуть|кличуть|(?<![^\W\d_])я\s*[—–-]?\s*" + name + r")"  # "Вовк мене звати", "я Вовк"
+    # a short sentence with his name is him saying who he is ("Шульга.", "Вовк я."), not talking about himself
     keep = [x for x in sentences if not re.search(r"(?<![^\W\d_])" + name + r"(?![^\W\d_])", x, re.I)
-            or re.search(intro, x, re.I)]
+            or re.search(intro, x, re.I) or len(re.findall(r"[^\W\d_]+", strip_tags(x))) <= 3]
     if keep and len(keep) < len(sentences):
         fixed = "".join(keep)
     return fixed.strip() or line
@@ -1567,7 +1569,11 @@ class Brain:
                                          or self.DEAL_WORDS.search(player_text or ""))
             text = self.ask_gemini(ask, system, smart) if LLM_PROVIDER == "gemini" else self.ask_claude(ask, system)
             text, self.last_action, self.last_extras = split_action(text or "")
-            text = drop_legend_address(drop_own_name(drop_narration(text, npc), npc))
+            text = drop_narration(text, npc)
+            # asked his name, "Вовк, а ти хто?" is his answer, not him talking to himself: keep the name then
+            if not ASKS_HIS_NAME.search(player_text or (extra or {}).get("line", "")):
+                text = drop_own_name(text, npc)
+            text = drop_legend_address(text)
             text = drop_echo(thin_player_name(text), player_text)
             # asked to wave, salute, sit...: he does it even if the model forgot the tag (not enemies, not the dying)
             asked = gesture_asked(player_text or (extra or {}).get("line", "")) if mode in ("reply", "addressed") else None

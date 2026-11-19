@@ -25,6 +25,11 @@ cases = [
     (boroda, "Борода каже: наливаю всім. Сідай.", "Наливаю всім. Сідай."),
     (boroda, "Наливаю всім, бо Борода знає, що вам важко.", "Наливаю всім, бо вам важко."),
     (vovk, "Я тут стою, а Вовк думає, що ти брешеш.", "Я тут стою, а ти брешеш."),
+    # asked his name, he answers with it: a short sentence with the name is an introduction, it stays
+    ({"name": "Шульга"}, "Шульга. Запам'ятай, бо двічі не повторюватиму.",
+     "Шульга. Запам'ятай, бо двічі не повторюватиму."),
+    (vovk, "Вовк я. А ти хто?", "Вовк я. А ти хто?"),
+    (vovk, "[sighs] Вовк. А ти, як чую, Кроль, так?", "[sighs] Вовк. А ти, як чую, Кроль, так?"),
 ]
 ok = True
 for npc, line, want in cases:
@@ -32,6 +37,14 @@ for npc, line, want in cases:
     good = got == want
     ok &= good
     print(("ok   " if good else "FAIL ") + f"{npc['name']}: {got}")
+
+# asked his name, "Вовк я, вільний сталкер." is his answer, not narration about himself; "Вовк зітхає" still is
+for raw_line, want in [("Вовк я, вільний сталкер. А ти хто?", "Вовк я, вільний сталкер. А ти хто?"),
+                       ("Вовк мене звати. А ти?", "Вовк мене звати. А ти?"),
+                       ("Вовк зітхає важко. Горілки нема.", "Горілки нема.")]:
+    got = talker.drop_narration(raw_line, vovk)
+    ok &= got == want
+    print(("ok   " if got == want else "FAIL ") + f"narration: {raw_line} -> {got}")
 
 for text, want in [("тут крыша з тушонки", "тут криша з тушонки"), ("Ёлки, это что", "Йолки, ето что"),
                    ("підъїзд", "під'їзд")]:
