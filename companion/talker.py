@@ -1687,6 +1687,9 @@ class Brain:
                 self.last_extras = [e for e in self.last_extras if e[0] == "emote" and not npc.get("wounded")]
             elif npc.get("story"):  # quest people trade money and gesture, but never kill
                 self.last_extras = [e for e in self.last_extras if e[0] != "kill"]
+            if npc.get("relation") == "enemy":  # no trade with an enemy; money only as the price of a truce
+                self.last_extras = [e for e in self.last_extras
+                                    if e[0] == "emote" or (e[0] == "take" and self.last_action == "calm")]
             text = re.sub(r"[*\"«»]", "", text).strip()
             text = re.sub(r"\S*thought\S*\s*", "", text, flags=re.I).strip()  # leaked "thought" header
             text = re.sub(r"^[А-ЯІЇЄҐа-яіїєґ](?:\s+(?=[А-ЯІЇЄҐ])|(?=\[))", "", text)  # and the stray letter before it
@@ -1949,7 +1952,8 @@ class Brain:
         # A trade goes on over several lines ("Винен?", "500 є"): the last exchange counts too.
         last = (history or [{}])[-1] if history else {}
         trade_said = " ".join([player_text or "", str(last.get("player", "")), str(last.get("npc", ""))])
-        trade_talk = mode == "reply" and bool(
+        enemy = npc.get("relation") == "enemy"  # enemies shoot, they don't trade
+        trade_talk = not enemy and mode == "reply" and bool(
             TRADE_WORDS.search(trade_said) or self.DEAL_WORDS.search(player_text or "")
             or offered_amount(player_text, history))
         if trade_talk and npc.get("stock"):
@@ -1965,7 +1969,7 @@ class Brain:
                          "goods.")
         # The player selling HIS things: what he carries and what you can pay.
         his_stock = actor.get("stock") or []
-        if mode == "reply" and selling_context(player_text, history) and not npc.get("wounded") \
+        if mode == "reply" and not enemy and selling_context(player_text, history) and not npc.get("wounded") \
                 and not is_monolith(npc):
             if his_stock:
                 cash = npc.get("money")
@@ -2050,12 +2054,14 @@ class Brain:
         deal_talk = mode == "reply" and (self.DEAL_WORDS.search(player_text or "") or agreed
                                          or (npc.get("stock") and TRADE_WORDS.search(player_text or "")))
         selling = selling_context(player_text, history) and not BUY_ASK.search(player_text or "")
-        if agreed and selling:
+        if enemy:  # no deals with an enemy (only a truce, set out further down)
+            pass
+        elif agreed and selling:
             parts.append(f"He just accepted your offer: you buy his thing for {agreed} and YOU pay HIM. Close the "
                          f"deal now with [ACTION: buy Exact item name for {agreed}].")
         elif agreed:
             parts.append(f"He just agreed to your price of {agreed}: close the deal now with the tags.")
-        if deal_talk:
+        if deal_talk and not enemy:
             actor = state.get("actor") or {}
             others = [n for n in state.get("npcs", []) if isinstance(n, dict) and n.get("id") != npc.get("id")
                       and n.get("dist", 99) < 40]
@@ -2075,7 +2081,7 @@ class Brain:
                                                                                 "twitch"):
             parts.append("Body language: you may add [ACTION: emote X] on a new line when your body would really do "
                          "it, X one of: " + ", ".join(EMOTES) + ". Rarely.")
-        if deal_talk and not npc.get("wounded") and not is_monolith(npc):
+        if deal_talk and not enemy and not npc.get("wounded") and not is_monolith(npc):
             parts.append(
                 "Items: when a sale is agreed (he accepted your price or you accepted his), hand it over with "
                 "[ACTION: item Exact item name] (one tag per item) plus [ACTION: take N]; a gift is just the item tag. "
@@ -2088,7 +2094,18 @@ class Brain:
                 "is generous: they grab it); honest stalkers rarely kill for money; scientists never. Never kill the "
                 "untouchable. Low price: haggle and name yours. When you agree, you MUST add the tags; words alone do "
                 "nothing.")
-        if mode == "reply" and npc.get("wounded") and not npc.get("story") and not is_monolith(npc):
+        if mode == "reply" and enemy and not npc.get("wounded") and not npc.get("story") and not is_monolith(npc):
+            parts.append(
+                "He is your enemy (you may be shooting at each other right now). You don't trade with enemies: no "
+                "selling, buying, gifts or favours. But he may surrender, beg, talk you down or offer you money to stop "
+                "the fight. If it's really worth it to you, you and your squad stop shooting at him: add "
+                "[ACTION: calm] on a new line, and if he pays for it, also [ACTION: take N] with the amount he offered. "
+                "You can't see how much money he has. Who takes it: bandits and "
+                "mercenaries take a bribe gladly (a few thousand for a whole squad is fair; too little is an insult), "
+                "ordinary stalkers stop for a sincere apology or a good reason, Долг and soldiers rarely, scientists "
+                "never fight anyway. A cheap trick, mockery or a lowball: keep fighting and say so. Without the tag "
+                "nothing changes: your words alone don't stop the shooting.")
+        elif mode == "reply" and npc.get("wounded") and not npc.get("story") and not is_monolith(npc):
             parts.append("If he truly helps you or promises a medkit, you may add on a new line [ACTION: friend]. "
                          "No other actions: you can't move.")
         elif mode == "reply" and not npc.get("story") and not is_monolith(npc):
@@ -3222,6 +3239,12 @@ class Talker:
         started.set()
         if mode in ("reply", "greet", "companion", "react", "event", "hostile"):  # these are said TO the player
             self.game.last_spoke_to_player = (npc.get("id"), time.time(), plain)
+        bribe = sum(a for k, a in extras if k == "take")
+        if npc.get("relation") == "enemy" and action == "calm" and bribe > (state.get("actor") or {}).get("money", 0):
+            # he agreed to stop for money the player doesn't have: no money, no truce
+            log(f"{npc.get('name')}: truce for {bribe} not done (you don't have it)")
+            self.game.send("info", None, f"Не вистачає грошей: {npc.get('name')} хотів {bribe}")
+            action, extras = None, [e for e in extras if e[0] != "take"]
         self.do_deals(npc, state, extras, key, player_text)
         current = {"enemy": "hostile", "friend": "friend"}.get(npc.get("relation"), "calm")
         redundant = action == current or (action == "follow" and npc.get("following")) or \
@@ -3231,7 +3254,8 @@ class Talker:
             self.game.send("act", npc["id"], action)
             log(f"{npc.get('name')} -> {action.upper()}")
             note = {"follow": "іде за вами", "stay": "лишається тут", "hostile": "тепер ворог",
-                    "friend": "тепер друг", "calm": "заспокоївся"}.get(action)
+                    "friend": "тепер друг", "calm": "і його загін припиняють вогонь" if npc.get("relation") == "enemy"
+                    else "заспокоївся"}.get(action)
             if note:
                 self.game.send("info", None, f"{npc.get('name')} {note}")
             if player_text:

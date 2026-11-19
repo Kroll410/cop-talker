@@ -264,6 +264,22 @@ local function add_grudge(a, b)
 	pcall(function() a:make_object_visible_somewhen(b) end)
 end
 
+-- Makes one man neutral to the player, the way the game's quests do it (game_relations.set_npcs_relation:
+-- personal goodwill). For a faction that hates the player (bandits) goodwill 0 may still leave him an enemy,
+-- so it goes up step by step until the game no longer counts the player as his enemy. Returns true if so.
+local function make_neutral(obj)
+	if grudges[obj:id()] then grudges[obj:id()][db.actor:id()] = nil end
+	pcall(function() obj:set_relation(game_object.neutral, db.actor) end)
+	for _, goodwill in ipairs({ 0, 300, 600, 1000, 1500 }) do
+		if obj:relation(db.actor) ~= game_object.enemy then break end
+		pcall(function() obj:force_set_goodwill(goodwill, db.actor) end)
+		pcall(function() alife():object(obj:id()):force_set_goodwill(goodwill, db.actor:id()) end)
+	end
+	return obj:relation(db.actor) ~= game_object.enemy
+end
+
+local calm_squad  -- defined below squad_mates
+
 local function squad_mates(npc)
 	local mates = {}
 	pcall(function()
@@ -275,6 +291,22 @@ local function squad_mates(npc)
 		end
 	end)
 	return mates
+end
+
+-- He and everyone in his squad (the ones near and the ones off-screen) stop fighting the player.
+calm_squad = function(npc)
+	local done = make_neutral(npc)
+	for _, mate in ipairs(squad_mates(npc)) do
+		pcall(make_neutral, mate)
+	end
+	pcall(function()  -- squad members not loaded right now: their A-Life goodwill, like the game's squads
+		for k in get_object_squad(npc):squad_members() do
+			if not (db.storage[k.id] and db.storage[k.id].object) then
+				alife():object(k.id):force_set_goodwill(1000, db.actor:id())
+			end
+		end
+	end)
+	return done
 end
 
 -- A fight between two men: both hate each other, and the target's squad stands by him.
@@ -590,9 +622,9 @@ local function do_action(npc_id, action)
 	elseif action == "stay" then
 		local oks2, err = pcall(stop_follow, npc)
 		if not oks2 then log_error("stay: " .. tostring(err)) end
-	elseif action == "calm" then
-		if grudges[npc:id()] then grudges[npc:id()][db.actor:id()] = nil end
-		npc:set_relation(game_object.neutral, db.actor)
+	elseif action == "calm" then  -- talked down or bribed: he and his whole squad stop fighting you
+		local done = calm_squad(npc)
+		append_event({ type = "act_done", action = action, ok = done })
 	elseif action == "friend" then
 		if grudges[npc:id()] then grudges[npc:id()][db.actor:id()] = nil end
 		npc:set_relation(game_object.friend, db.actor)
