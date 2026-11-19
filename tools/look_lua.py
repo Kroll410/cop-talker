@@ -102,4 +102,13 @@ step(300)
 c = calls()
 print("emote while looking ->", c)
 ok &= "5:threat:6" in c
+# one inbox line that fails (here: the PDA news call, missing in these stubs) must not lose the lines after it
+L.execute("db.storage[5].state_mgr = nil; db.storage[6].state_mgr = nil")
+step(7000)
+calls()
+inbox("info||this line fails in the stubs" + chr(13) + "\nact|5|look:6:4")
+step(300)
+c = calls()
+print("after a failing line ->", c)
+ok &= "5:guard:6" in c
 print("OK" if ok else "FAIL")

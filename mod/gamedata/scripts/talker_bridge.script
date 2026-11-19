@@ -870,6 +870,8 @@ local function show_line(npc_id, text, caption, showtime)
 	db.actor:give_game_news(caption, text, icon, 0, showtime or 9000, 0)
 end
 
+local inbox_line  -- one inbox line; defined right after read_inbox
+
 local function read_inbox()
 	-- Rename first, then read: a line the app appends while we read would otherwise be deleted unread.
 	-- If the app is writing right now the rename fails, and we simply try again in 200 ms.
@@ -881,23 +883,29 @@ local function read_inbox()
 	f:close()
 	os.remove(taken)
 	for line in string.gmatch(body, "[^\n]+") do
-		local kind, id, text = string.match(line, "^(%w+)|(%-?%d*)|(.*)$")
-		if kind == "say" then show_line(tonumber(id), text)
-		elseif kind == "you" then show_line(nil, text, db.actor:character_name())
-		elseif kind == "info" then show_line(nil, text, "StalkerTalker", 3000)
-		elseif kind == "sub" then show_subtitle(tonumber(id), text)
-		elseif kind == "status" then set_status(text, 15000)
-		elseif kind == "link" then  -- "link|<npc id>|<nickname>"; an empty nickname removes the link
-			local npc_id = tonumber(id)
-			if npc_id then twitch_links[npc_id] = (text ~= "" and text) or nil end
-			link_shown = false  -- redraw the label
-		elseif kind == "twitch" then
-			local nick, msg = string.match(text, "^(.-): (.*)$")  -- viewer's nickname as the PDA caption
-			show_line(nil, msg or text, (nick or "Twitch") .. " (Twitch)", 9000)
-		elseif kind == "act" then
-			local ok, err = pcall(do_action, tonumber(id), text)
-			if not ok then log_error("act " .. text .. ": " .. tostring(err)) end
-		end
+		-- each line on its own: one that fails (a dead NPC, a missing HUD) must not lose the ones after it
+		local ok, err = pcall(inbox_line, (string.gsub(line, "\r$", "")))
+		if not ok then log_error("inbox line: " .. tostring(err)) end
+	end
+end
+
+inbox_line = function(line)  -- declared above read_inbox
+	local kind, id, text = string.match(line, "^(%w+)|(%-?%d*)|(.*)$")
+	if kind == "say" then show_line(tonumber(id), text)
+	elseif kind == "you" then show_line(nil, text, db.actor:character_name())
+	elseif kind == "info" then show_line(nil, text, "StalkerTalker", 3000)
+	elseif kind == "sub" then show_subtitle(tonumber(id), text)
+	elseif kind == "status" then set_status(text, 15000)
+	elseif kind == "link" then  -- "link|<npc id>|<nickname>"; an empty nickname removes the link
+		local npc_id = tonumber(id)
+		if npc_id then twitch_links[npc_id] = (text ~= "" and text) or nil end
+		link_shown = false  -- redraw the label
+	elseif kind == "twitch" then
+		local nick, msg = string.match(text, "^(.-): (.*)$")  -- viewer's nickname as the PDA caption
+		show_line(nil, msg or text, (nick or "Twitch") .. " (Twitch)", 9000)
+	elseif kind == "act" then
+		local ok, err = pcall(do_action, tonumber(id), text)
+		if not ok then log_error("act " .. text .. ": " .. tostring(err)) end
 	end
 end
 
