@@ -198,6 +198,18 @@ ok &= check(t.twitch_links.get("bob") not in (None, bobs_before), f"bob's next m
 say("eve", "%%")  # nothing to unlink: nothing happens
 run_queue()
 
+# chat clients' invisible marks and emoji: gone before anything is said or matched; "%% ͏" still unlinks
+spoken.clear()
+say("anna", "$Привіт, сталкери ͏🔥")
+say("anna", "$͏")
+run_queue()
+ok &= check([l for _, l in spoken] == ["Привіт, сталкери"], f"invisible marks and emoji dropped: {spoken}")
+ok &= check(talker.mentions({"name": "Борода"}, talker.chat_text("ask Борода​ why")), "Борода​ still named")
+had = "anna" in t.twitch_links
+say("anna", "%% ͏")
+ok &= check(had and "anna" not in t.twitch_links, "%% with an invisible mark still unlinks")
+run_queue()
+
 
 # TWITCH_LINKS=0: no links at all; any man nearby says each message, labels left in the game are taken down
 talker.TWITCH_LINKS = False

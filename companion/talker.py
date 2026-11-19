@@ -18,6 +18,7 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 from pathlib import Path
 
 import keyboard
@@ -463,6 +464,16 @@ def named_bystander(lines, bystanders, talkers=()):
             if n.get("id") not in ids and mentions(n, strip_tags(line)):
                 return n
     return None
+
+
+def chat_text(text):
+    """A Twitch message as words only: invisible marks some chat clients add to repeat a message ("\\u034f",
+    zero-width spaces), emoji and other symbols go (in the game's text they'd show as "?", and they break
+    name matching: "Борода\\u200b")."""
+    text = unicodedata.normalize("NFC", text or "")
+    text = "".join(c for c in text if unicodedata.category(c) not in ("Cf", "Cc", "Co", "Cs", "Cn", "Mn", "Me", "So", "Sk")
+                   or c in "\n\t")
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def talked_to(lines, i, first=None):
@@ -3705,7 +3716,7 @@ class Talker:
 
     # ------------------------------------------------------------ Twitch: viewers speak through NPCs
     def on_twitch(self, user, text, redemption):
-        text = text.strip()
+        text = chat_text(text)  # first, so "%% ͏" (a chat client's invisible mark) is still "%%"
         if text == "%%":  # "unlink me": his NPC is let go; his next message gets another man
             if TWITCH_LINKS:
                 self.unlink_viewer(user)
@@ -3720,7 +3731,7 @@ class Talker:
                 if redemption is not None and self.twitch:
                     self.twitch.finish(redemption, spoken=False)  # a reward without $ or %: refund the points
                 return
-        text = re.sub(r"https?://\S+|www\.\S+", "", text).strip()[:200]
+        text = chat_text(re.sub(r"https?://\S+|www\.\S+", "", text))[:200]
         if not text or any(w in text.lower() for w in TWITCH_BLOCKED):
             log(f"Twitch: skipped a message from {user}")
             if self.twitch:
