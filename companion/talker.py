@@ -1218,11 +1218,12 @@ def thin_player_name(text, keep=0.35):
     # only the name that opens the line ("Бродяго, ...", "Ех... Бродяго, ..."), never one in the middle
     m = re.match(r"^((?:\[[^\]]*\]\s*)?(?:(?:ну|ой|ох|ех|ай|та|ага|слухай|чуєш)[.…,!]*\s+)?)" + stem
                  + r"\w{0,3}\s*[,.…!]+\s*(\w?)", text, re.I)
-    if not m:
-        return text
-    head, first = m.group(1), m.group(2)
-    rest = text[m.end():]
-    return (head + first.upper() + rest).strip() or text
+    if m:
+        head, first = m.group(1), m.group(2)
+        text = (head + first.upper() + text[m.end():]).strip() or text
+    # ...and the name set off by commas in the middle or at the end ("Та нормально, Кролю, живий поки",
+    # "чё ти питаєш, Кроль?"); a name inside the words ("той самий Кроль, про якого...") stays
+    return re.sub(r",\s*" + stem + r"\w{0,3}\s*(?=[,.!?…]|$)", "", text, flags=re.I).strip() or text
 
 
 def too_similar(text, recent, threshold=0.6):

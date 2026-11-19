@@ -69,6 +69,21 @@ ok &= voiced == ["Ну привіт, привіт.", "Та шо нового. [s
 print(("ok   " if voiced[:4] == ["Ну привіт, привіт.", "Та шо нового. [sighs]", "Іду... зараз буду.", "Аптечку..."]
        else "FAIL ") + f"trailing '...': {voiced}")
 
+# the player's name in most lines got tiring (16 of 20 live replies): an address set off by commas, anywhere in
+# the line, is kept only in about a third of lines; a name inside the words stays
+real_name, talker.PLAYER_NAME = talker.PLAYER_NAME, "Кроль"
+for line, want in [("Та нормально, Кролю, живий поки, хулі.", "Та нормально, живий поки, хулі."),
+                   ("чё ти питаєш, Кроль?", "чё ти питаєш?"), ("Кролю, бар у Скадовську.", "Бар у Скадовську."),
+                   ("Ти часом не той самий Кроль, про якого всі базікають?",
+                    "Ти часом не той самий Кроль, про якого всі базікають?")]:
+    got = talker.thin_player_name(line, keep=0)
+    ok &= got == want
+    print(("ok   " if got == want else "FAIL ") + f"player name thinned: {got}")
+kept = sum("Крол" in talker.thin_player_name("Та нормально, Кролю, живий поки.") for _ in range(600))
+ok &= 120 < kept < 300
+print(("ok   " if 120 < kept < 300 else "FAIL ") + f"name kept in {kept} of 600 lines")
+talker.PLAYER_NAME = real_name
+
 if "--live" in sys.argv:
     talker.LLM_PROVIDER = "claude"
     brain = talker.Brain()
