@@ -2483,13 +2483,20 @@ class Voice:
                     on_start()
 
         voice_id = self.voice_for(npc)
-        if not self.client or not voice_id:
-            start()
+        if not self.client or not voice_id or time.time() < getattr(self, "voice_off_until", 0):
+            start()  # no voice (or the credits are used up for now): the subtitle alone
             return
         original = text
 
         def other_voice(exc):
-            """The voice was deleted in ElevenLabs: forget it and say the line with the next fitting voice."""
+            """The voice was deleted in ElevenLabs: forget it and say the line with the next fitting voice.
+            The month's credits are used up: stop asking for 10 minutes, lines go as text at once."""
+            if out_of_credits(exc):
+                self.voice_off_until = time.time() + 600
+                log(f"ElevenLabs credits are used up ({api_error(exc)}): lines are shown as text, "
+                    "trying the voice again in 10 min")
+                start()
+                return True
             if getattr(exc, "status_code", None) == 404 and "voice" in str(getattr(exc, "body", "")).lower():
                 self.mark_dead(voice_id)
                 self.say(npc, original, save_to, current_dist, start, volume, overlap)
@@ -2645,6 +2652,11 @@ def pick_mic():
     if default is not None and default >= 0 and not BLUETOOTH_MIC.search(sd.query_devices(default)["name"]):
         return None  # Windows' own default is already a normal mic
     return next((i for i, name in mics if not BLUETOOTH_MIC.search(name)), None)
+
+
+def out_of_credits(exc):
+    """ElevenLabs says the character quota is used up (it answers 401 "quota_exceeded")."""
+    return exc is not None and "quota_exceeded" in str(getattr(exc, "body", "") or exc).lower()
 
 
 def api_error(exc):
