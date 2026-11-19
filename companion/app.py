@@ -3,6 +3,7 @@
 Runs companion/talker.py as a child process and reads its output, so a crash in the helper never takes
 the window down, and "Save and restart" applies new settings at once.
 """
+import html
 import os
 import re
 import subprocess
@@ -64,17 +65,110 @@ def crash_hook(kind, value, tb):
     LOG.flush()
 
 
-STYLE = """
-QWidget { background: #1d1f1a; color: #d9d4c3; font-size: 10pt; }
-QPlainTextEdit, QLineEdit, QComboBox { background: #262922; border: 1px solid #3c4134; padding: 4px; }
-QPushButton { background: #3a4030; border: 1px solid #56604a; padding: 6px 14px; }
-QPushButton:hover { background: #4a523d; }
-QPushButton#primary { background: #6b5a2a; border-color: #8f7a3a; }
-QTabWidget::pane { border: 1px solid #3c4134; }
-QTabBar::tab { background: #262922; padding: 6px 16px; border: 1px solid #3c4134; }
-QTabBar::tab:selected { background: #3a4030; }
-QLabel#muted { color: #9a9582; }
+# The Zone's PDA: one olive-graphite ramp, three text roles, one amber accent for the main action, the
+# selection and the "on air" dot. Depth from surface steps and hairlines, no glows.
+DEEP, PAGE, RAISED, HOVER = "#141512", "#191a17", "#20221e", "#292b26"
+HAIR = "rgba(226, 221, 204, 0.09)"
+TEXT, TEXT2, MUTED = "#e2ddcc", "#a9a593", "#868272"
+AMBER, ON_AMBER, RED = "#d0a54a", "#1a1608", "#d9655b"
+STYLE = f"""
+QWidget {{ background: {PAGE}; color: {TEXT}; font-family: "Segoe UI"; font-size: 10pt; }}
+QToolTip {{ background: {RAISED}; color: {TEXT}; border: 1px solid {HAIR}; padding: 6px; }}
+QPlainTextEdit {{ background: {DEEP}; border: 1px solid {HAIR}; border-radius: 10px; padding: 8px;
+                 selection-background-color: #4a3f22; }}
+QLineEdit, QComboBox {{ background: {RAISED}; border: 1px solid {HAIR}; border-radius: 8px; padding: 6px 8px; }}
+QLineEdit:focus, QComboBox:focus {{ border-color: {AMBER}; }}
+QComboBox QAbstractItemView {{ background: {RAISED}; border: 1px solid {HAIR}; selection-background-color: {HOVER};
+                              selection-color: {TEXT}; }}
+QPushButton {{ background: {RAISED}; color: {TEXT}; border: 1px solid {HAIR}; border-radius: 8px; padding: 6px 14px; }}
+QPushButton:hover {{ background: {HOVER}; }}
+QPushButton:pressed {{ background: {DEEP}; }}
+QPushButton:focus {{ border-color: rgba(208, 165, 74, 0.6); }}
+QPushButton:disabled {{ color: {MUTED}; }}
+QPushButton#primary {{ background: {AMBER}; color: {ON_AMBER}; border-color: {AMBER}; font-weight: 600; }}
+QPushButton#primary:hover {{ background: #dbb25b; }}
+QPushButton#primary:pressed {{ background: #bf953f; }}
+QTabWidget::pane {{ border: none; }}
+QTabBar::tab {{ background: transparent; color: {TEXT2}; border: none; border-bottom: 2px solid transparent;
+               padding: 8px 2px; margin-right: 20px; }}
+QTabBar::tab:hover {{ color: {TEXT}; }}
+QTabBar::tab:selected {{ color: {TEXT}; border-bottom: 2px solid {AMBER}; }}
+QScrollArea {{ border: none; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 4px 2px; }}
+QScrollBar::handle:vertical {{ background: rgba(226, 221, 204, 0.14); border-radius: 3px; min-height: 24px; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
+QLabel#muted {{ color: {MUTED}; }}
+QLabel#secondary {{ color: {TEXT2}; }}
+QLabel#section {{ color: {TEXT}; font-size: 11pt; font-weight: 500; padding-top: 16px; }}
+QLabel#state {{ font-weight: 500; }}
 """
+
+# "On air": the dot next to the status. Lit amber while the game is on, an amber ring while waiting for it.
+DOT = {"live": f"background: {AMBER}; border: 1px solid {AMBER};",
+       "waiting": f"background: transparent; border: 1px solid {AMBER};",
+       "off": f"background: #3d3e37; border: 1px solid #3d3e37;"}
+
+# Settings: what a person reads, the setting's own name stays below in small type.
+NICE = {"STALKER_DIR": "Game folder", "SPEAK_MODE": "Speaking", "PTT_KEY": "Push-to-talk key", "MIC": "Microphone",
+        "SUBTITLES": "Subtitles", "STREAM_VOICE": "Stream the voice", "TTS_SPEED": "Voice speed",
+        "NPC_VOLUME": "NPC volume", "LINE_GAP": "Pause between lines", "GREET_CHANCE": "Greeting chance",
+        "GREET_COOLDOWN": "Greeting cooldown", "HOSTILE_CHANCE": "Enemy shout chance",
+        "CHIME_CHANCE": "Bystander joins in", "REACT_CHANCE": "Reaction chance", "REACT_COOLDOWN": "Reaction cooldown",
+        "GROUP_MAX": "Group answers, at most", "GROUP_DISTANCE": "Group distance", "GROUP_STYLE": "Group style",
+        "GROUP_ASIDE_VOLUME": "Mutter volume", "COMPANION_CHANCE": "Companion talk chance",
+        "COMPANION_COOLDOWN": "Companion cooldown", "CHAT_CHANCE": "NPC chat chance", "CHAT_COOLDOWN": "NPC chat cooldown",
+        "CHAT_DISTANCE": "NPC chat distance", "PLAYER_NAME": "Your nickname", "PLAYER_BIO": "Your backstory",
+        "FUN_LEVEL": "Humour", "QUIRK_CHANCE": "Quirks", "MEMORY_KEEP": "Talks kept word for word",
+        "CLEAR_MEMORY": "Clear memory on start", "OUTSIDE_TALK": "Talk about life outside", "NEWS_FEEDS": "News feeds",
+        "TWITCH_ENABLED": "Twitch", "TWITCH_SOURCE": "Source", "TWITCH_CHANNEL": "Channel",
+        "TWITCH_QUEUE_MAX": "Messages waiting, at most", "TWITCH_REWARD": "Reward title", "TWITCH_COST": "Reward cost",
+        "TWITCH_UNPREFIXED": "Messages without $ or %", "TWITCH_DISTANCE": "NPC distance",
+        "TWITCH_SHOW_NAME": "Nick in the PDA", "TWITCH_LINKS": "Viewer keeps his NPC", "TWITCH_BLOCKED": "Blocked words",
+        "LLM_PROVIDER": "Replies by", "CLAUDE_MODEL": "Claude model", "CLAUDE_CLI": "Claude Code program",
+        "GEMINI_MODEL": "Gemini model", "GEMINI_SMART_MODEL": "Gemini model for deals",
+        "STT_MODELS": "Speech recognition"}
+WIDE = {"STALKER_DIR", "PLAYER_BIO", "NEWS_FEEDS", "CLAUDE_CLI", "TWITCH_BLOCKED", "STT_MODELS"}
+
+
+def span(text, color, mono=False):
+    font = "font-family: Consolas; font-size: 9pt; " if mono else ""
+    return f'<span style="{font}color: {color}">{html.escape(text)}</span>'
+
+
+SPEECH = re.compile(r"^(\s*)([^\W\d_][^:]{0,40}?)(\s\([^)]*\))?: (.+)$")
+QUIET = ("Game:", "News:", "Audio:", "NPC replies", "Loading", "  (", "Twitch: ", "memory", "voice ")
+
+
+def log_html(line):
+    """One log line as a radio transcript: the time small and dim, who speaks in amber, what NPCs say bright,
+    everything the helper says about itself quieter."""
+    m = re.match(r"^(\d\d:\d\d:\d\d) (.*)$", line)
+    time, rest = (m.group(1), m.group(2)) if m else ("", line)
+    head = span(time, MUTED, mono=True) + "&nbsp;&nbsp;" if time else ""
+    indent = "&nbsp;" * 4 * (len(rest) - len(rest.lstrip(" ")) > 0)
+    body = rest.lstrip(" ")
+    if body.startswith("—"):
+        return span(body, MUTED)
+    if body.startswith("You died"):
+        return head + span(body, RED)
+    tw = re.match(r"^Twitch \(([^)]+)\) (via|to) ([^:]+): (.+)$", body)
+    if tw:
+        return (head + span(f"Twitch · {tw.group(1)}  ", MUTED) + span(tw.group(3), AMBER) + span(": ", MUTED)
+                + span(tw.group(4), TEXT))
+    ans = re.match(r"^(.+?) (answers|heard his name):\s*(.*)$", body)
+    if ans:
+        return (head + indent + span(ans.group(1), AMBER) + span(f" {ans.group(2)}: ", MUTED)
+                + span(ans.group(3), TEXT))
+    sp = SPEECH.match(body)
+    if sp and re.search(r"[а-яіїєґА-ЯІЇЄҐ]", sp.group(2)) and not body.startswith(QUIET):
+        who = sp.group(2)
+        color = TEXT2 if who == "You" else AMBER
+        return (head + indent + span(who, color) + span((sp.group(3) or "") + ": ", MUTED)
+                + span(sp.group(4), TEXT))
+    if body.startswith("You:"):
+        return head + span("You", TEXT2) + span(": ", MUTED) + span(body[4:].strip(), TEXT)
+    return head + indent + span(body, MUTED if body.startswith(QUIET) else TEXT2)
 
 
 class SettingsTab(QWidget):
@@ -85,16 +179,22 @@ class SettingsTab(QWidget):
         self.on_save = on_save
         self.fields = {}
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 12, 0, 0)
+        outer.setSpacing(12)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         inner = QWidget()
         self.form = QFormLayout(inner)
-        self.form.setLabelAlignment(Qt.AlignRight)
+        self.form.setLabelAlignment(Qt.AlignRight | Qt.AlignTop)
+        self.form.setContentsMargins(16, 0, 24, 16)
+        self.form.setHorizontalSpacing(16)
+        self.form.setVerticalSpacing(12)
         scroll.setWidget(inner)
         outer.addWidget(scroll)
         row = QHBoxLayout()
         row.addStretch()
-        open_env = QPushButton("Open .env (keys)")
+        open_env = QPushButton("Open .env")
+        open_env.setToolTip("Keys and voice IDs live there")
         open_env.clicked.connect(lambda: os.startfile(ROOT / ".env"))
         save = QPushButton("Save and restart")
         save.setObjectName("primary")
@@ -114,7 +214,7 @@ class SettingsTab(QWidget):
                 hint.append(s.lstrip("# "))
             elif s.startswith("["):
                 title = QLabel(s.strip("[]"))
-                title.setFont(QFont(title.font().family(), 11, QFont.Bold))
+                title.setObjectName("section")
                 self.form.addRow(title)
                 hint = []
             elif "=" in s and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", s.split("=", 1)[0].strip()):
@@ -130,17 +230,22 @@ class SettingsTab(QWidget):
                 else:
                     field = QLineEdit(value)
                 field.setToolTip(text)
-                label = QLabel(key)
+                field.setMaximumWidth(240 if isinstance(field, QComboBox) else 720 if key in WIDE else 360)
+                label = QLabel(NICE.get(key, key.replace("_", " ").capitalize()))
                 label.setToolTip(text)
-                box = QVBoxLayout()
-                box.setSpacing(1)
+                label.setContentsMargins(0, 6, 0, 0)  # level with the text inside the field
+                cell = QWidget()
+                cell.setMaximumWidth(720)
+                box = QVBoxLayout(cell)
+                box.setContentsMargins(0, 0, 0, 0)
+                box.setSpacing(4)
                 box.addWidget(field)
-                if text:
-                    note = QLabel(text)
-                    note.setObjectName("muted")
-                    note.setWordWrap(True)
-                    box.addWidget(note)
-                self.form.addRow(label, box)
+                note = QLabel((html.escape(text.rstrip(". ")) + "&nbsp;&nbsp;" if text else "")
+                              + span(key, "#6f6c5f", mono=True))
+                note.setObjectName("muted")
+                note.setWordWrap(True)
+                box.addWidget(note)
+                self.form.addRow(label, cell)
                 self.fields[key] = field
                 self.loaded[key] = self.value(key)  # what the form showed, to know later what YOU changed
                 hint = []
@@ -183,8 +288,12 @@ class Window(QMainWindow):
         self.proc = None
 
         top = QHBoxLayout()
+        top.setSpacing(8)
+        self.dot = QLabel()
+        self.dot.setFixedSize(8, 8)
         self.state = QLabel("Stopped")
-        self.state.setFont(QFont(self.state.font().family(), 11, QFont.Bold))
+        self.state.setObjectName("state")
+        self.set_status("Stopped", "off")
         self.toggle = QPushButton("Start")
         self.toggle.setObjectName("primary")
         self.toggle.clicked.connect(self.toggle_run)
@@ -201,6 +310,8 @@ class Window(QMainWindow):
         self.mode.setToolTip("All: NPCs answer your mic and talk on their own.\n"
                              "Chat only: NPCs only say Twitch chat messages ($ word for word, % in their words).")
         self.mode.clicked.connect(self.switch_mode)
+        top.addWidget(self.dot)
+        top.addSpacing(4)
         top.addWidget(self.state)
         top.addStretch()
         top.addWidget(self.mode)
@@ -212,13 +323,16 @@ class Window(QMainWindow):
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(3000)
-        self.log.setFont(QFont("Consolas", 10))
+        self.log.setFont(QFont("Segoe UI", 10))
 
         twitch = QWidget()
         tl = QVBoxLayout(twitch)
+        tl.setContentsMargins(4, 16, 4, 0)
+        tl.setSpacing(12)
         self.twitch_state = QLabel("Twitch: off (add TWITCH_CLIENT_ID to .env, see the guide below)")
         self.twitch_state.setWordWrap(True)
         self.twitch_queue = QLabel("Waiting messages: 0")
+        self.twitch_queue.setObjectName("secondary")
         self.twitch_code = QPushButton("")
         self.twitch_code.setObjectName("primary")
         self.twitch_code.hide()
@@ -232,12 +346,13 @@ class Window(QMainWindow):
         auth_row = QHBoxLayout()
         auth_row.addWidget(auth)
         auth_row.addStretch()
+        code = f'style="font-family: Consolas; color: {TEXT2}"'
         guide = QLabel(
-            "<b>Setup (once)</b><ol>"
-            "<li>Open <a href='https://dev.twitch.tv/console/apps'>dev.twitch.tv/console/apps</a> → Register Your "
-            "Application. Name: anything. OAuth Redirect URL: <code>http://localhost</code>. Category: Game "
+            f"<p style='color: {TEXT}; font-weight: 500'>Setup, once</p><ol style='color: {TEXT2}'>"
+            f"<li>Open <a style='color: {AMBER}' href='https://dev.twitch.tv/console/apps'>dev.twitch.tv/console/apps</a> → Register Your "
+            f"Application. Name: anything. OAuth Redirect URL: <span {code}>http://localhost</span>. Category: Game "
             "Integration. Client Type: <b>Public</b>.</li>"
-            "<li>Copy its Client ID into .env as <code>TWITCH_CLIENT_ID=...</code>.</li>"
+            f"<li>Copy its Client ID into .env as <span {code}>TWITCH_CLIENT_ID=...</span>.</li>"
             "<li>Press <b>Authorize Twitch app</b>. The Twitch page opens with your code: sign in and allow "
             "access.</li>"
             "<li><b>chat</b> mode (default, no Affiliate needed): a chat message starting with <b>$</b> is said "
@@ -247,6 +362,7 @@ class Window(QMainWindow):
             "message, created for you; needs Affiliate/Partner.</li></ol>")
         guide.setOpenExternalLinks(True)
         guide.setWordWrap(True)
+        guide.setMaximumWidth(760)
         tl.addWidget(self.twitch_state)
         tl.addWidget(self.twitch_queue)
         tl.addLayout(auth_row)
@@ -266,6 +382,8 @@ class Window(QMainWindow):
 
         body = QWidget()
         lay = QVBoxLayout(body)
+        lay.setContentsMargins(16, 16, 16, 12)
+        lay.setSpacing(12)
         lay.addLayout(top)
         lay.addWidget(tabs, 1)
         lay.addWidget(self.usage)
@@ -290,7 +408,7 @@ class Window(QMainWindow):
         self.proc.readyReadStandardOutput.connect(self.read_output)
         self.proc.finished.connect(self.on_finished)
         self.proc.start(str(PYTHON), ["-u", str(ROOT / "companion" / "talker.py")])
-        self.state.setText("Running")
+        self.set_status("Running", "waiting")
         self.toggle.setText("Stop")
         self.append("— helper started —")
 
@@ -341,8 +459,7 @@ class Window(QMainWindow):
             proc.kill()
             proc.waitForFinished(3000)
         self.read_output_from(proc)
-        self.state.setText("Stopped")
-        self.state.setStyleSheet("")
+        self.set_status("Stopped", "off")
         self.toggle.setText("Start")
         self.append("— helper stopped —")
 
@@ -356,7 +473,7 @@ class Window(QMainWindow):
     def on_finished(self, code, _status):
         self.read_output()  # the last lines before it died are usually the error
         self.proc = None
-        self.state.setText(f"Stopped (exit {code})")
+        self.set_status(f"Stopped (exit {code})", "off")
         self.toggle.setText("Start")
         self.append(f"— helper exited with code {code} —")
 
@@ -380,8 +497,7 @@ class Window(QMainWindow):
         kind, _, text = line.partition("|")
         if kind == "GAME":
             on = text == "running"
-            self.state.setText("Running: game on" if on else "Waiting for S.T.A.L.K.E.R.")
-            self.state.setStyleSheet("color: #9fcf7a;" if on else "color: #d9b25a;")
+            self.set_status("Game on" if on else "Waiting for S.T.A.L.K.E.R.", "live" if on else "waiting")
         elif kind == "USAGE":
             self.usage.setText(text)
         elif kind == "TWITCH":
@@ -408,9 +524,13 @@ class Window(QMainWindow):
                                           f"Authorize there. Code {code} (copied, in case it asks).")
                 self.raise_()
 
+    def set_status(self, text, dot):
+        self.state.setText(text)
+        self.dot.setStyleSheet(DOT[dot] + " border-radius: 4px;")
+
     def append(self, text):
         LOG.write(text + "\n")
-        self.log.appendPlainText(text)
+        self.log.appendHtml(log_html(text))
         self.log.moveCursor(QTextCursor.End)
 
     def install_mod(self):
