@@ -354,6 +354,14 @@ FUN_RULE += ("\n- The Duty faction is called only Долг (Долгу, Долг
              "\n- Say something real: answer what you're asked. Don't trail off with '...' at the end of a line "
              "(only a badly wounded man does).")
 SYSTEM_PROMPT = SYSTEM_PROMPT.format(tags=AUDIO_TAGS_RULE if EXPRESSIVE else "", fun=FUN_RULE)
+# The model grabs the same bright filler from the list over and over ("йопта" in 4 of 11): each request
+# gets its own few to lean on, so different lines sound different.
+FILLERS = ["блін", "бляха", "бляха-муха", "бля", "блять", "йопта", "йо-майо", "єбать", "їбать-копать", "хулі", "нахуй",
+           "нахера", "сука", "курва", "пиздець", "хуй його знає", "шо за хуйня", "ну нахєр", "трясця", "ядрить"]
+
+
+def filler_hint():
+    return "Fillers that suit this moment, if any fits (others are fine too): " + ", ".join(random.sample(FILLERS, 3)) + "."
 MONOLITH_PROMPT = MONOLITH_PROMPT.format(tags=MONOLITH_TAGS_RULE if EXPRESSIVE else "")
 
 
@@ -2057,6 +2065,7 @@ class Brain:
         elif mode == "reply" and len(re.findall(r"\w+", player_text or "")) <= 3 and not (deal_talk or trade_talk):
             parts.append("He said only a few words: ONE short sentence, at most 10 words. If his words make no sense "
                          "(a mumble, a misheard word), just ask back in 1-4 words.")
+        parts.append(filler_hint())
         return "\n".join(parts)
 
     def summarize(self, old_summary, turns):
@@ -2189,6 +2198,7 @@ class Brain:
                 f"{n.get('name')} ({COMMUNITIES.get(n.get('community'), n.get('community'))})" for n in nearby[:4])
                 + ". Now and then (about one talk in three) they bring one of them up by name: gossip about him, "
                   "a jab, call him over, ask what he thinks. He can hear it.")
+        parts.append(filler_hint())
         parts.append(f"A is {a.get('name')}, B is {b.get('name')}. Nobody says his own name; he may call the other one "
                      "by name.")
         parts.append(f"{scene}\nWrite their exchange." if scene else "Write their exchange.")

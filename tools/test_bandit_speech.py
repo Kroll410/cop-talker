@@ -40,6 +40,13 @@ t.speak(bandit, "Слышь, братан, чё ты тут забыл?")
 t.speak(stalker, "Та в нього тут крыша з тушонки.")
 ok &= check(voiced == ["Слышь, братан, чё ты тут забыл?", "Та в нього тут криша з тушонки."], f"voiced: {voiced}")
 
+# each request suggests its own few fillers, so the model doesn't lean on one ("йопта" everywhere)
+hints = {talker.filler_hint() for _ in range(20)}
+ok &= check(len(hints) > 10 and all(h.split(": ", 1)[1].count(", ") == 2 for h in hints),
+            f"filler hints vary: {len(hints)} different of 20")
+prompt = talker.Brain.__new__(talker.Brain).situation(stalker, {"level": "zaton", "npcs": [stalker]}, "", [], "Привіт")
+ok &= check("Fillers that suit this moment" in prompt, "a reply prompt carries its own filler hint")
+
 if "--live" in sys.argv:
     talker.LLM_PROVIDER = "claude"
     brain = talker.Brain()
