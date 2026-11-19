@@ -1051,6 +1051,11 @@ def carries(stock, keys):
     return any(k in s for s in secs for k in keys)
 
 
+# Goods that are someone else's or somewhere else: "в Бороди", "у нього", "у Сича", "в Скадовську", "там"
+ELSEWHERE = re.compile(r"(?<!\w)[вВуУ]\s+((?i:бороди|сидорович\w*|сича|бармен\w*|торговц\w*|нього|неї|них|"
+                       r"скадовськ\w*|бар[іу]|бункер\w*)|[А-ЯІЇЄҐ][а-яіїєґ']+[иа])(?!\w)|(?<!\w)(?i:там)(?!\w)")
+
+
 def phantom_items(text, stock):
     """Items he offers or says he has but doesn't carry: "Є пляшка горілки, 600 купонів" with no vodka on him.
     Returns [(sentence, item word), ...]."""
@@ -1058,6 +1063,8 @@ def phantom_items(text, stock):
     for sentence in re.findall(r"[^.!?…]+[.!?…]*", strip_tags(text or "")):
         if not OFFER_SIGNS.search(sentence) or NO_SIGNS.search(sentence):
             continue
+        if ELSEWHERE.search(sentence) and not re.search(r"(?<!\w)(в|у)\s+мене(?!\w)", sentence, re.I):
+            continue  # "В Бороди є тушонка, бери там": someone else's goods, not his offer
         if sentence.strip().endswith("?") and not re.search(r"\d|купон|штук|косар", sentence, re.I):
             continue  # "Аптечка є?" asks him, it doesn't offer anything
         for words, keys in ITEM_KINDS:
