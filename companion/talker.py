@@ -1425,8 +1425,20 @@ class Memory:
             return self._init_rest()
         try:
             self.data = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            if not isinstance(self.data, dict):
+                raise ValueError("not a dictionary")
+        except OSError:
             self.data = {}
+        except ValueError as exc:
+            # A broken file (a crash mid-write, a hand edit): keep a copy instead of overwriting it with an empty
+            # memory on the first save, so nothing the NPCs remembered is lost for good.
+            self.data = {}
+            broken = MEMORY_FILE.with_name(f"memory.broken-{time.strftime('%Y%m%d-%H%M%S')}.json")
+            try:
+                os.replace(MEMORY_FILE, broken)
+                log(f"memory.json was broken ({exc}); kept as {broken.name}, starting with an empty memory")
+            except OSError:
+                pass
         self._init_rest()
 
     def _init_rest(self):
@@ -2412,6 +2424,8 @@ class Voice:
         if not hasattr(self, "kept_voices"):
             try:
                 self.kept_voices = json.loads(self.VOICES_FILE.read_text(encoding="utf-8"))
+                if not isinstance(self.kept_voices, dict):
+                    self.kept_voices = {}
             except (OSError, ValueError):
                 self.kept_voices = {}
         kept = self.kept_voices.get(who) if who else None

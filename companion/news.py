@@ -126,7 +126,10 @@ class News:
         except (OSError, ValueError):
             return []
         cutoff = time.time() - FORGET_AFTER
-        return [dict(e, stems=set(e["stems"])) for e in data if e.get("last", 0) > cutoff]
+        try:
+            return [dict(e, stems=set(e["stems"])) for e in data if e.get("last", 0) > cutoff]
+        except (KeyError, TypeError, AttributeError):  # an old or broken file: start afresh
+            return []
 
     def _save_seen(self):
         if not self.seen_file:

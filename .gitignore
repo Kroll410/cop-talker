@@ -8,6 +8,8 @@ __pycache__/
 twitch_token.json
 memory.json
 memory.json.tmp
+memory.tmp
+memory.broken-*.json
 usage.json
 logs/*
 !logs/.keep

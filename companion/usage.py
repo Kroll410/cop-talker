@@ -11,6 +11,8 @@ class Usage:
         self.lock = threading.Lock()
         try:
             self.data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(self.data, dict):
+                self.data = {}
         except (OSError, ValueError):
             self.data = {}
         self.quota = None  # (used, limit) of ElevenLabs credits this month, from their API
