@@ -724,13 +724,20 @@ def offered_amount(player_text, history=()):
     return 0
 
 
-def stock_name(entry):
-    """'Аптечка x3 ~300 #medkit' -> 'Аптечка (3 pcs, price 300)' (the model never sees game section names)."""
-    head = clean_game_text(str(entry).split(" #")[0])
+def stock_name(entry, side="sell", relation="neutral"):
+    """'Аптечка x3 ~300 #medkit' -> 'Аптечка (3 pcs, 600 coupons each)' (the model never sees game section names).
+    ~300 is the game's base cost; the price shown is the game's own trade price: what he asks for his things
+    (side "sell"), or what he'd pay for the player's (side "buy"), for a friend, a neutral or an enemy."""
+    head, _, section = str(entry).partition(" #")
+    head = clean_game_text(head)
     m = re.match(r"(.*?)\s+x(\d+)(?:\s+~(\d+))?$", head)
     if not m:
         return head
-    return f"{m.group(1)} ({m.group(2)} pcs" + (f", price {m.group(3)} coupons" if m.group(3) else "") + ")"
+    if not m.group(3):
+        return f"{m.group(1)} ({m.group(2)} pcs)"
+    cost = int(m.group(3))
+    price = (prices.sell_price if side == "sell" else prices.buy_price)(section.strip(), cost, relation)
+    return f"{m.group(1)} ({m.group(2)} pcs, {price} coupons each)"
 
 
 def find_stock_item(stock, wanted):
@@ -1297,6 +1304,7 @@ def game_running():
 from usage import Usage  # noqa: E402  (companion/usage.py)
 from news import DEFAULT_FEEDS, News  # noqa: E402  (companion/news.py)
 from lore import lore_for  # noqa: E402  (companion/lore.py)
+import prices  # noqa: E402  (companion/prices.py: the game's own trade prices)
 
 USAGE = Usage(ROOT / "usage.json")
 
@@ -1945,11 +1953,13 @@ class Brain:
             TRADE_WORDS.search(trade_said) or self.DEAL_WORDS.search(player_text or "")
             or offered_amount(player_text, history))
         if trade_talk and npc.get("stock"):
-            parts.append("Everything you carry, nothing else (you have no other goods, whatever was said before): "
-                         + "; ".join(stock_name(s_) for s_ in npc["stock"][:30])
+            parts.append("Everything you carry, nothing else (you have no other goods, whatever was said before), "
+                         "with the going Zone price for each: "
+                         + "; ".join(stock_name(s_, "sell", npc.get("relation")) for s_ in npc["stock"][:30])
                          + ". You can sell or give only these. Asked for anything else: you don't have it, say so "
-                           "(you may offer something from this list instead). Traders charge 20-50% over the base "
-                           "price, others haggle.")
+                           "(you may offer something from this list instead). Ask about these prices: you may start "
+                           "a bit higher and come down a little when he haggles (not below about 80% of it), or "
+                           "give a friend a better deal. Never invent other prices.")
         elif trade_talk:
             parts.append("You have nothing to sell or give right now. Don't offer, promise or name a price for any "
                          "goods.")
@@ -1960,12 +1970,13 @@ class Brain:
             if his_stock:
                 cash = npc.get("money")
                 parts.append(
-                    "He wants to sell you something. What he carries that he could sell: "
-                    + "; ".join(stock_name(s_) for s_ in his_stock[:30]) + ". "
+                    "He wants to sell you something. What he carries that he could sell, with what such a thing is "
+                    "worth to you in the Zone (what you'd pay): "
+                    + "; ".join(stock_name(s_, "buy", npc.get("relation")) for s_ in his_stock[:30]) + ". "
                     + (f"You have {cash} coupons, never pay more. " if cash is not None else "")
                     + "Buy only what someone like you would want (traders buy almost anything; others mostly food, "
-                      "medicine, ammo, a good gun or artifacts) and haggle: traders pay 30-60% of the base price, others "
-                      "about as much as it's worth to them. If he only asks whether you'd buy or what you'd pay, name your "
+                      "medicine, ammo, a good gun or artifacts) and haggle around that price: offer a bit less, "
+                      "go up a little if he pushes (never above about 120% of it); guns go cheap in the Zone. If he only asks whether you'd buy or what you'd pay, name your "
                       "price and wait. When a price is agreed (he accepted yours or you accepted his), add "
                       "[ACTION: buy Exact item name for N] with N = that price, one tag per item. Here HE sells and "
                       "YOU pay him: never use the item or take tags for his things. Things he doesn't carry don't "

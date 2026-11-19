@@ -31,7 +31,7 @@ Conversations can change things in the game:
 - a gesture (wave, salute…), also on request;
 - following you or staying put;
 - turning hostile or becoming a friend;
-- selling or buying an item, handing over money;
+- selling or buying an item (at the game's own trade prices: cheaper for a friend, dearer for an enemy), handing over money;
 - paying a debt: if you gave him a medkit or helped him fight someone off, you can ask for money;
 - taking a paid hit. If the target is far away, the killer's squad goes looking for him.
 
