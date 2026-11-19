@@ -499,12 +499,40 @@ PLURAL_YOU = re.compile(r"(?<!\w)(ви|вас|вам|вами)\s+(\w+\s+)?(чу�
                         r"уявляєте|пам'ятаєте|думаєте|хочете|маєте|будете|підете|чуєте|допоможете|скажете|"
                         r"порадите|зможете|збираєтесь|бачите|розумієте)|(?<!\w)(хто|хтось|кому|кого)\s+(з|із|зі)\s+вас|"
                         r"(?<!\w)у\s+вас\s+(тут\s+)?(є|був|була|було)|"
-                        r"^\W*(чули|знаєте|уявляєте|прикиньте|прикинь|слухайте|дивіться|гляньте|алло|ау)(?!\w)", re.I)
+                        r"^\W*(чули|знаєте|уявляєте|прикиньте|прикинь|слухайте|дивіться|гляньте|алло|ау|чуєте)(?!\w)|"
+                        r"(?<!\w)(ей|агов|гей)\W+ви(?!\w)|"
+                        r"(?<!\w)ви\s+(?:\w+\s+){0,2}\w+(ите|ете|єте|іте|їте)(?!\w)", re.I)
+
+
+# A group word counts only as an address, not when he talks ABOUT people ("люди кажуть...", "вони всі пішли"):
+# opening the phrase (maybe after "ей", "привіт"...), set off by commas/"!", or in a greeting ("всім привіт").
+# Words that are also ordinary words ("всі", "люди", "мужики") open a phrase only with a comma or "!" after them.
+AMBIGUOUS_GROUP = re.compile(r"(всі|всім|всіх|усі|усім|усіх|люди|мужики|мужиків|мужикам|хлопців|хлопцям|пацанів|"
+                             r"пацанам|сталкерів|сталкерам|мужиків|друзі|колеги|кожен|кожному|хтось|"
+                             r"бандюки|свободівці|довгарі|вояки|земляки|сталкери|народ)", re.I)
+GREETING = r"(?:привіт\w*|здоров\w*|здрастуйте|здрасьте|вітаю|салют|хай|йо|ку|доброго\s+\w+|добрий\s+\w+)"
+OPENER = r"^\W*(?:(?:ей|агов|гей|ну|йо|слухайте|" + GREETING[3:-1] + r")\W+)?"
 
 
 def to_everyone(text):
     """Said to the people around, not to one man: "пацани...", "гайз...", "ви чули...", "хто з вас..."."""
-    return bool(text) and bool(GROUP_WORDS.search(text) or PLURAL_YOU.search(text))
+    if not text:
+        return False
+    if PLURAL_YOU.search(text) or re.search(r"(?<!\w)(є\s+(хтось|хто)|хто-небудь)(?!\w)|^\W*хтось\s+\w+[^.!]*\?",
+                                             text, re.I):
+        return True
+    if re.search(r"(?<!\w)(всім|усім)\s*[,!]?\s*" + GREETING + r"|" + GREETING + r"\s*[,!]?\s*(всім|усім)(?!\w)",
+                 text, re.I):
+        return True
+    for m in GROUP_WORDS.finditer(text):
+        word, before, after = m.group(0), text[:m.start()], text[m.end():]
+        set_off = re.search(r"[,!]\s*$", before) and re.match(r"\s*([,!?.…]|$)", after)
+        opens = re.fullmatch(OPENER, before, re.I) is not None
+        if set_off:
+            return True
+        if opens and (not AMBIGUOUS_GROUP.fullmatch(word) or re.match(r"\s*[,!?]", after) or not after.strip()):
+            return True
+    return False
 
 
 APOS = "['’ʼ`]"
