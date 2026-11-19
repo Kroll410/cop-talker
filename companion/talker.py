@@ -344,7 +344,9 @@ FUN_RULE += ("\n- The Duty faction is called only Долг (Долгу, Долг
              "\n- Fillers and swear words go anywhere in a sentence, the way people really talk: at the start, in the "
              "middle between words, as a pause before the point; not always tacked on at the end. Rotate them, "
              "don't lean on one: блін, бляха, бляха-муха, бля, блять, йопта, йо-майо, єбать, їбать-копать, хулі, "
-             "нахуй, нахера, сука, курва, пиздець, хуй його знає, шо за хуйня, ну нахєр, трясця.")
+             "нахуй, нахера, сука, курва, пиздець, хуй його знає, шо за хуйня, ну нахєр, трясця."
+             "\n- Say something real: answer what you're asked. Don't trail off with '...' at the end of a line "
+             "(only a badly wounded man does).")
 SYSTEM_PROMPT = SYSTEM_PROMPT.format(tags=AUDIO_TAGS_RULE if EXPRESSIVE else "", fun=FUN_RULE)
 MONOLITH_PROMPT = MONOLITH_PROMPT.format(tags=MONOLITH_TAGS_RULE if EXPRESSIVE else "")
 
@@ -2866,6 +2868,9 @@ class Talker:
         # a bandit's surzhyk keeps its Russian words; everyone else's stray Russian letters become Ukrainian
         fix = fix_factions if npc.get("community") == "bandit" else (lambda t: ukrainian_letters(fix_factions(t)))
         line, pda_text = fix(line), fix(pda_text)
+        if not npc.get("wounded"):  # "Ну привіт, привіт..." -> "Ну привіт, привіт." (only the dying trail off)
+            line, pda_text = (re.sub(r"\s*(?:\.{2,}|…)(\s*(?:\[[^\]]*\])?\s*)$", r".\1", t) if t else t
+                              for t in (line, pda_text))
         plain = strip_tags(line)
         self.spoken.append((time.time(), plain))
         try:  # a news story he just told won't be offered again (unless it's big news)

@@ -52,6 +52,23 @@ for text, want in [("тут крыша з тушонки", "тут криша з
     ok &= got == want
     print(("ok   " if got == want else "FAIL ") + f"{text} -> {got}")
 
+# a healthy man doesn't trail off with "..." (the wounded still do)
+voiced = []
+tk = talker.Talker.__new__(talker.Talker)
+tk.recording, tk.spoken = False, []
+tk.game = type("G", (), {"send": lambda self, *x: None, "distance_to": lambda self, i: 3})()
+tk.voice = type("V", (), {"say": lambda self, npc, line, **k: voiced.append(line)})()
+tk.brain = type("B", (), {"news": type("N", (), {"mark_mentioned": lambda self, x: []})()})()
+tk.show_line = lambda *a: None
+talker.report = lambda *a: None
+tk.speak(vovk, "Ну привіт, привіт...")
+tk.speak(vovk, "Та шо нового… [sighs]")
+tk.speak(vovk, "Іду... зараз буду.")
+tk.speak(dict(vovk, wounded=True), "Аптечку...")
+ok &= voiced == ["Ну привіт, привіт.", "Та шо нового. [sighs]", "Іду... зараз буду.", "Аптечку..."]
+print(("ok   " if voiced[:4] == ["Ну привіт, привіт.", "Та шо нового. [sighs]", "Іду... зараз буду.", "Аптечку..."]
+       else "FAIL ") + f"trailing '...': {voiced}")
+
 if "--live" in sys.argv:
     talker.LLM_PROVIDER = "claude"
     brain = talker.Brain()
