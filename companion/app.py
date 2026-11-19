@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SETTINGS = ROOT / "settings.ini"
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from settings_file import ensure_settings  # noqa: E402  (settings.ini from the example, plus new options)
+from settings_file import ensure_settings, read_text  # noqa: E402  (settings.ini from the example, plus new options)
 
 try:
     SETTINGS_NOTE = ensure_settings(ROOT)
@@ -30,7 +30,7 @@ except Exception as exc:  # never keep the window from opening
 def setting(key, default=""):
     """A value from settings.ini (the window reads only what it needs; the helper loads them all)."""
     try:
-        for line in SETTINGS.read_text(encoding="utf-8-sig").splitlines():
+        for line in read_text(SETTINGS).splitlines():
             k, sep, v = line.partition("=")
             if sep and k.strip() == key:
                 return v.split(" #")[0].strip() or default
@@ -105,7 +105,7 @@ class SettingsTab(QWidget):
         self.load()
 
     def load(self):
-        self.lines = SETTINGS.read_text(encoding="utf-8-sig").splitlines() if SETTINGS.exists() else []
+        self.lines = read_text(SETTINGS).splitlines() if SETTINGS.exists() else []
         self.loaded = {}
         hint = []
         for line in self.lines:
@@ -160,7 +160,7 @@ class SettingsTab(QWidget):
         """Write back only the settings changed in this window, into the file as it is NOW on disk,
         so lines added to settings.ini by hand while the window was open are kept."""
         changed = {k: self.value(k) for k in self.fields if self.value(k) != self.loaded.get(k)}
-        current = SETTINGS.read_text(encoding="utf-8-sig").splitlines() if SETTINGS.exists() else self.lines
+        current = read_text(SETTINGS).splitlines() if SETTINGS.exists() else self.lines
         out = []
         for line in current:
             s = line.strip()
@@ -306,7 +306,7 @@ class Window(QMainWindow):
         self.show_mode()
 
     def authorize_twitch(self):
-        env = (ROOT / ".env").read_text(encoding="utf-8-sig") if (ROOT / ".env").exists() else ""
+        env = read_text(ROOT / ".env") if (ROOT / ".env").exists() else ""
         if not re.search(r"^\s*TWITCH_CLIENT_ID\s*=\s*\S+", env, re.M):
             QMessageBox.information(self, "StalkerTalker", "First add your Twitch app's Client ID to .env:\n\n"
                                     "TWITCH_CLIENT_ID=...\n\n(Settings tab → Open .env). See the guide below.")

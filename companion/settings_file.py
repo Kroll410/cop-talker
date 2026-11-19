@@ -11,6 +11,16 @@ from pathlib import Path
 KEY = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 
 
+def read_text(path):
+    """settings.ini / .env as text: UTF-8 (with or without BOM), or the Windows codepage a plain Notepad save
+    may leave (cp1251), so a «PLAYER_NAME=Бродяга» saved as ANSI never stops the app from starting."""
+    data = Path(path).read_bytes()
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("cp1251", errors="replace")
+
+
 def _blocks(lines):
     """[(section, key, [notes..., "KEY=value"])] for every option in the example, in order."""
     out, section, notes = [], "", []
@@ -37,9 +47,9 @@ def ensure_settings(root):
     if not mine.exists():
         shutil.copyfile(example, mine)
         return "settings.ini created from settings.example.ini"
-    lines = mine.read_text(encoding="utf-8-sig").splitlines()
+    lines = read_text(mine).splitlines()
     have = {KEY.match(line).group(1) for line in lines if KEY.match(line)}
-    missing = [b for b in _blocks(example.read_text(encoding="utf-8-sig").splitlines()) if b[1] not in have]
+    missing = [b for b in _blocks(read_text(example).splitlines()) if b[1] not in have]
     if not missing:
         return ""
     for section, key, block in missing:

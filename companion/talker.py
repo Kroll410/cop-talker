@@ -51,7 +51,13 @@ def load_env():
         if not env_file.exists():
             continue
         values, last = {}, None
-        for number, raw in enumerate(env_file.read_text(encoding="utf-8-sig").splitlines(), 1):
+        try:
+            from settings_file import read_text
+            text = read_text(env_file)
+        except Exception as exc:
+            print(f"{name} could not be read: {exc!r}", file=sys.stderr)
+            continue
+        for number, raw in enumerate(text.splitlines(), 1):
             line = raw.split(" #")[0].strip() if name == "settings.ini" else raw.strip()
             if not line or line.startswith(("#", ";", "[")):
                 last = None if line.startswith("[") else last
