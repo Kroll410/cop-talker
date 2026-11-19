@@ -25,5 +25,18 @@ for text, want in CASES.items():
     ok &= good
     if not good:
         print(f"FAIL {text!r}: {got} (want {want})")
+# asking a price or what he sells puts his stock in the prompt (a trader asked "Скільки за хліб?" said
+# "я шо тобі, пекарня?" with bread in his bag)
+TRADE = ["Скільки за хліб?", "За скільки віддаси хліб?", "По чому ковбаса?", "Почому патрони?", "Що в тебе є?",
+         "Шо продаєш?", "Продаси хліб?"]
+NOT_TRADE = ["Скільки тобі років?", "Скільки за мною йде мутантів?", "Як справи?"]
+for q in TRADE:
+    if not talker.TRADE_WORDS.search(q):
+        ok = False
+        print(f"FAIL trade not seen: {q!r}")
+for q in NOT_TRADE:
+    if talker.TRADE_WORDS.search(q):
+        ok = False
+        print(f"FAIL taken as trade: {q!r}")
 print(f"{len(CASES)} phrases")
 print("OK" if ok else "FAIL")

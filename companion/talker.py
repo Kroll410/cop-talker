@@ -898,7 +898,10 @@ GROUP_SYSTEM = """You write how several men in the Zone (S.T.A.L.K.E.R.: Call of
     "\n- In at most one line you may put one English tag in square brackets for the voice: [laughs], [sighs], "
     "[chuckles], [coughs], [whispers]." if EXPRESSIVE else ""))
 TRADE_WORDS = re.compile(r"подаруй|подаруєш|позич|віддай|(?<![^\W\d_])дай(?![^\W\d_])|дайте|обміня|прода|купи|купл|ціна|ціни|скільки (коштує|хочеш|просиш)|що (є|маєш)|товар|патрон|аптечк|"
-                         r"броню|костюм|зброю|ствол|їж|горілк|обмін|торг", re.I)
+                         r"броню|костюм|зброю|ствол|їж|горілк|обмін|торг|"
+                         # asking a price or what he has: "скільки за хліб?", "за скільки віддаси?", "по чому?"
+                         r"скільки\s+за\s+(?!мною|тобою|ним|нею|нами|вами|ними)|за\s+скільки|по\s*ч[оі]м\w*|почому|(що|шо)\s+(в|у)\s+тебе\s+(є|на продаж)|"
+                         r"(що|шо)\s+продаєш", re.I)
 # The player wants to sell HIS things to the NPC.
 SELL_WORDS = re.compile(r"продам|продаю|продати тобі|продам тобі|купиш|купите|купи в мене|купи у мене|купить у мене|"
                         r"візьмеш|візьми в мене|візьми у мене|скупа|скупову|здам|здати|здаю|хочеш купити|"
