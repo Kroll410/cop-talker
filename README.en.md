@@ -77,7 +77,7 @@ In chat:
 - `%%`: let go of your NPC (your next message is said by another one);
 - talking to everyone ("гайз", plural "ви"): several NPCs answer.
 
-A viewer gets linked to a free NPC within `TWITCH_DISTANCE`. If that NPC dies, the link goes; the viewer gets a new one with his next message. Nobody's NPC is taken from them.
+A viewer gets linked to a free NPC within `TWITCH_DISTANCE`. If that NPC dies, the link goes; the viewer gets a new one with his next message. Nobody's NPC is taken from them. Links can be turned off (`TWITCH_LINKS=0`): then any NPC nearby says each message, with no nick labels.
 
 ## Keys
 

@@ -58,6 +58,7 @@ class FakeBrain:
 t = talker.Talker.__new__(talker.Talker)
 t.busy, t.recording, t.twitch = threading.Lock(), False, None
 t.twitch_queue, t.twitch_links, t.twitch_names, t.next_twitch_note, t.left_npc = [], {}, {}, 0, {}
+t.next_link_sync = 0
 t.spoken = []
 t.save_links = lambda: None
 t.recent_lines = lambda: []
@@ -196,5 +197,27 @@ run_queue()
 ok &= check(t.twitch_links.get("bob") not in (None, bobs_before), f"bob's next message: a new man ({via('bob')})")
 say("eve", "%%")  # nothing to unlink: nothing happens
 run_queue()
+
+
+# TWITCH_LINKS=0: no links at all; any man nearby says each message, labels left in the game are taken down
+talker.TWITCH_LINKS = False
+t.twitch_links, t.twitch_names, t.left_npc = {}, {}, {}
+sent.clear()
+spoken.clear()
+for i in range(8):
+    say("anna", f"$без прив'язки {i}")
+run_queue()
+by = {n for n, l in spoken if l.startswith("без прив'язки")}
+ok &= check(len(spoken) == 8 and not t.twitch_links and not any(x[0] == "link" for x in sent),
+            "links off: 8 messages said, nobody linked, no labels")
+ok &= check(len(by) > 1, f"links off: said by different men ({sorted(by)})")
+say("anna", "%%")
+run_queue()
+ok &= check(len(spoken) == 8, "links off: %% does nothing")
+sent.clear()
+t.sync_links({"npcs": state["npcs"], "twitch_links": [11, 13]})
+ok &= check(("link", 11, "") in sent and ("link", 13, "") in sent, "links off: old labels in the game are cleared")
+t.next_link_sync = 0
+talker.TWITCH_LINKS = True
 
 print("OK" if ok else "FAIL")

@@ -1,4 +1,4 @@
-"""Bandits talk surzhyk (about half Russian, Russian words kept in Russian letters); everyone else speaks
+"""Bandits talk surzhyk (about 3 words in 10 Russian, kept in Russian letters); everyone else speaks
 Ukrainian (stray Russian letters fixed). «жид» is in the bandits' street vocabulary like the other slurs; others
 use it only rarely, and a man it's thrown at reacts. With --live, Claude writes lines."""
 import re

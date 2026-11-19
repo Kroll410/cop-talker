@@ -237,6 +237,8 @@ TWITCH_COST = int(os.environ.get("TWITCH_COST", "500"))
 TWITCH_UNPREFIXED = os.environ.get("TWITCH_UNPREFIXED", "ignore").lower()
 TWITCH_DISTANCE = float(os.environ.get("TWITCH_DISTANCE", "25"))
 TWITCH_SHOW_NAME = os.environ.get("TWITCH_SHOW_NAME", "1") != "0"
+# Each viewer keeps his own NPC (nick label in game, "%%" lets go); 0 = any NPC nearby says each message
+TWITCH_LINKS = os.environ.get("TWITCH_LINKS", "1") != "0"
 TWITCH_BLOCKED = [w.strip().lower() for w in os.environ.get("TWITCH_BLOCKED", "").split(",") if w.strip()]
 
 LEVELS = {"zaton": "Затон", "jupiter": "Юпітер", "pripyat": "Прип'ять",
@@ -338,7 +340,11 @@ FUN_RULE += ("\n- The Duty faction is called only Долг (Долгу, Долг
              "долгівців, долгівцям). Never \"Обов'язок\" or \"обов'язківці\" for them."
              "\n- Only Ukrainian letters (never ы, э, ъ, ё), except for a bandit: he talks surzhyk, and his Russian "
              "words are written in Russian. Never talk about yourself by "
-             "your own name, as if about someone else.")
+             "your own name, as if about someone else."
+             "\n- Fillers and swear words go anywhere in a sentence, the way people really talk: at the start, in the "
+             "middle between words, as a pause before the point; not always tacked on at the end. Rotate them, "
+             "don't lean on one: блін, бляха, бляха-муха, бля, блять, йопта, йо-майо, єбать, їбать-копать, хулі, "
+             "нахуй, нахера, сука, курва, пиздець, хуй його знає, шо за хуйня, ну нахєр, трясця.")
 SYSTEM_PROMPT = SYSTEM_PROMPT.format(tags=AUDIO_TAGS_RULE if EXPRESSIVE else "", fun=FUN_RULE)
 MONOLITH_PROMPT = MONOLITH_PROMPT.format(tags=MONOLITH_TAGS_RULE if EXPRESSIVE else "")
 
@@ -382,9 +388,12 @@ def slur_note(npc):
     return ""
 
 
-BANDIT_SPEECH = (" Speech: surzhyk, about half Russian and half Ukrainian, mixed inside sentences like a street thug "
-                 "(\"слышь\", \"чё\", \"братан\", \"базар\", \"короче\" next to Ukrainian words); his Russian words "
-                 "are written in Russian.")
+BANDIT_SPEECH = (" Speech: surzhyk, mostly Ukrainian with Russian mixed in: in every sentence about a third of the "
+                 "words Russian (3 in 10), the rest Ukrainian, like a street thug (\"слышь\", \"чё\", \"братан\", "
+                 "\"базар\", \"короче\", \"щас\", \"чисто\", \"по ходу\", \"ваще\", \"понял\", \"тока\", Russian verbs and "
+                 "endings among Ukrainian words). Don't open with \"слышь\" more than one line in four, don't say "
+                 "\"братан\" every line, and don't start by calling the man by name every time. Never a whole sentence in Russian. His Russian words are "
+                 "written in Russian.")
 
 
 # The nickname stalkers know the player by (empty: they don't know his name)
@@ -3613,7 +3622,8 @@ class Talker:
     def on_twitch(self, user, text, redemption):
         text = text.strip()
         if text == "%%":  # "unlink me": his NPC is let go; his next message gets another man
-            self.unlink_viewer(user)
+            if TWITCH_LINKS:
+                self.unlink_viewer(user)
             if redemption is not None and self.twitch:
                 self.twitch.finish(redemption, spoken=False)
             return
@@ -3652,9 +3662,11 @@ class Talker:
         named = [n for n in npcs if mentions(n, item[1])]
         others = [n for n in npcs if n not in named]
         # Each viewer speaks through "his" NPC while that man is around; otherwise he gets a new one.
-        link = self.twitch_links.get(user.lower())
+        link = self.twitch_links.get(user.lower()) if TWITCH_LINKS else None
         linked = next((n for n in npcs if link and n.get("id") == link), None)
-        if linked:
+        if not TWITCH_LINKS:  # links off: any man nearby (not one the message names) says it
+            npc = random.choice(others) if others else None
+        elif linked:
             # his own man always speaks for him, even if the words seem to name him ("бороду" vs Борода)
             npc = linked
             named = [n for n in named if n is not linked]
@@ -3722,6 +3734,10 @@ class Talker:
 
     def sync_links(self, state):
         """The game forgets the labels when a save loads: show them again for linked NPCs it doesn't know."""
+        if not TWITCH_LINKS:  # links off: take down labels left from before (a save keeps them)
+            for npc_id in state.get("twitch_links") or []:
+                self.game.send("link", int(npc_id), "")
+            return
         if time.time() < self.next_link_sync or not self.twitch_links:
             return
         self.next_link_sync = time.time() + 5
