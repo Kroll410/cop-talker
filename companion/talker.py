@@ -598,9 +598,10 @@ NUMBER_WORDS = [("один|одна|одну|одного|одне", 1), ("дв�
                 ("вісімдесят|вісімдесяти", 80), ("дев'яносто", 90),
                 ("сто", 100), ("двісті", 200), ("триста", 300), ("чотириста", 400),
                 ("п'ятсот", 500), ("шістсот", 600), ("сімсот", 700), ("вісімсот", 800), ("дев'ятсот", 900),
-                ("тисяча|тисячу|тисячі", 1000)]
+                ("тисяча|тисячу|тисячі", 1000), ("пів", 0.5), ("півтори|півтора", 1.5), ("пару|пара", 2)]
 NUMBER_VALUE = {form: value for words, value in NUMBER_WORDS for form in words.split("|")}
 THOUSANDS = r"(тисяч\w*|тис\b\.?|штук\w*|штуки|косар\w*|к(?![\wа-яіїєґ]))"
+HUNDREDS = r"(сотн\w*|сотен\w*|сотк\w*|сотню)"  # "три сотні", "пару сотень", "сотку"
 # A small number is a price, not a count, right after "за/по" or right before a money word ("за дванадцять",
 # "12 купонів"); "три кабани" stays a count.
 PRICE_BEFORE = re.compile(r"(?:^|\s)(за|по|ціна|коштує|віддам за|продам за|дам|даю|плачу)\s*$")
@@ -615,6 +616,8 @@ def amounts(text):
     for m in re.finditer(r"(?<![\d.,])(\d{1,3}(?:[  ]\d{3})+|\d+)(?![\d.,]\d)\s*" + THOUSANDS + "?", low):
         number = int(re.sub(r"\D", "", m.group(1)))
         found.append(number * 1000 if m.group(2) else number)
+    for m in re.finditer(r"(?<![\d.,])(\d+)[.,](\d{1,3})\s*" + THOUSANDS, low):  # "1,5к", "2.5 тисячі"
+        found.append(int(round(float(f"{m.group(1)}.{m.group(2)}") * 1000)))
     for m in re.finditer(r"(?<![\w'])(десятк[аиу])(?![\w'])", low):  # "десятка" = 10 000
         found.append(10000)
     # Number words, joined into one number when they follow each other: "двадцять п'ять" = 25,
@@ -622,24 +625,28 @@ def amounts(text):
     words = list(re.finditer(r"[a-zа-яіїєґ']+", low))
     i = 0
     while i < len(words):
-        if words[i].group(0) not in NUMBER_VALUE:
+        # a number word starts it; of the hundreds words only the slang for 100 coupons ("сотку", "сотню")
+        if words[i].group(0) not in NUMBER_VALUE and not re.fullmatch(r"сотк\w*|сотню", words[i].group(0)):
             i += 1
             continue
         start, total, part = words[i].start(), 0, 0
         while i < len(words) and (words[i].group(0) in NUMBER_VALUE
-                                  or re.fullmatch(THOUSANDS, words[i].group(0))):
+                                  or re.fullmatch(THOUSANDS, words[i].group(0))
+                                  or re.fullmatch(HUNDREDS, words[i].group(0))):
             w = words[i].group(0)
             if w in NUMBER_VALUE and NUMBER_VALUE[w] == 1000:
-                total += max(part, 1) * 1000
+                total += (part or 1) * 1000  # "пів тисячі" = 500
                 part = 0
+            elif re.fullmatch(HUNDREDS, w):  # "три сотні" = 300
+                part = (part or 1) * 100
             elif w in NUMBER_VALUE:
                 part += NUMBER_VALUE[w]
             else:  # тисяч, штук, косарів
-                total += max(part, 1) * 1000
+                total += (part or 1) * 1000
                 part = 0
             end = words[i].end()
             i += 1
-        value = total + part
+        value = int(round(total + part))  # "півтори тисячі" = 1500; a bare "пів" is no price
         thousands = total > 0
         is_price = (thousands or value > 20 or PRICE_BEFORE.search(low[:start])
                     or PRICE_AFTER.match(low[end:]))
