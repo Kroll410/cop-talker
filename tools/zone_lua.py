@@ -316,6 +316,52 @@ if len(balls) == 2 and sausage:
           f"the sausage is between them, pointing away from the player (balls z={balls[0]['z']:.2f}, sausage z={s0['z']:.2f})")
     check(all(abs(x["y"] - 0.1) < 1e-6 and x["parent"] is None for x in c), "all on the ground (just above it), none in the backpack")
 check(ev and ev[0]["ok"] and ev[0]["what"] == "suslov" and any("Суслова" in x for x in n), f"done, with a PDA line {ev} {n}")
+
+# they stay props: settle, then pinned; the fireballs never hide; picked up -> put back; kept over a reload
+L.execute("""
+pstor, shown, drops = {}, {}, {}
+xr_logic.pstor_store = function(_, k, v) pstor[k] = v end
+xr_logic.pstor_retrieve = function(_, k, d) return pstor[k] or d end
+function prop(id, x, af)
+  local o = make(id, "prop", x)
+  o._fixed = {}
+  function o:parent() return self._parent end
+  function o:get_physics_shell() return { get_elements_number = function() return 2 end,
+    get_element_by_order = function(_, i) return { is_fixed = function() return o._fixed[i] end,
+      fix = function() o._fixed[i] = true end } end } end
+  if af then function o:get_artefact() return { SwitchVisibility = function(_, b) table.insert(shown, id) end } end
+  else function o:get_artefact() error("not an artifact") end end
+  return o
+end""")
+ids = {x["sec"]: [] for x in c}
+for x in c:
+    ids[x["sec"]].append(x["id"])
+    L.execute(f"prop({x['id']}, {x['x']}, {'true' if x['sec'] == 'af_fireball' else 'false'})")
+pinned = lambda i: L.eval(f"objs[{i}]._fixed[0] == true and objs[{i}]._fixed[1] == true")
+step(1100)
+check(not any(pinned(x["id"]) for x in c), "just landed: not pinned yet (let them settle)")
+step(1100); step(1100)
+check(all(pinned(x["id"]) for x in c), "settled: every piece pinned in place, they don't roll")
+shown = take("shown")
+check(set(shown) == set(ids["af_fireball"]), f"the fireballs are kept shown, the sausage isn't asked {shown}")
+ball = ids["af_fireball"][0]
+L.execute(f"""objs[{ball}]._x = 0.5
+db.actor.drop_item_and_teleport = function(self, o, p) table.insert(drops, o:id() .. '@' .. p.z); o._parent = nil end
+objs[{ball}]._parent = db.actor; on_item_take(objs[{ball}])""")
+check(not [e for e in events() if e.get("type") == "artifact"], "picking one up isn't reported as a found artifact")
+step(100)
+drops = take("drops")
+check(len(drops) == 1 and drops[0].startswith(f"{ball}@"), f"picked up: put straight back on the ground {drops}")
+saved = L.eval("pstor.talker_props") or ""
+check(saved.count(";") == 2 and saved.count(":1:1") == 2, f"kept in the save, pinned: {saved}")
+L.execute(f"on_actor_spawn(); for _, i in ipairs({{{','.join(str(x['id']) for x in c)}}}) do objs[i]._fixed = {{}} end")
+step(1100)
+check(all(pinned(x["id"]) for x in c), "after a reload: pinned again at once (already settled before)")
+L.execute(f"objs[{ids['kolbasa'][0]}] = nil")
+step(1100)
+check(ids["kolbasa"][0] not in [int(p.split(":")[0]) for p in (L.eval("pstor.talker_props") or "").split(";") if p],
+      "a prop gone from the game is forgotten")
+events()
 L.execute("HAVE.kolbasa = false")
 inbox("zone||suslov|c|t")
 step(300)

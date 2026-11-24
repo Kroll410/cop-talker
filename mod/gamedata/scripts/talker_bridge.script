@@ -1048,6 +1048,82 @@ end
 -- the sausage's middle further ahead by SUSLOV_SHAFT, right between them.
 SUSLOV_AHEAD, SUSLOV_SHAFT, SUSLOV_BALLS = 1.6, 0.28, { 0.12, -0.12 }
 
+-- What «Шари Суслова» lays out stays a prop: once it has settled on the ground its physics is pinned (it doesn't
+-- roll, slide or get kicked away), a fireball is always shown (the game hides an artifact on the ground after a few
+-- seconds from anyone without a detector), and whoever picks one up (the player or an NPC) has it put straight back
+-- where it lay. Kept with the save (the player's pstor), so it holds after a reload too.
+local props = {}  -- id -> { x, y, z, af = is an artifact, pinned = settled and pinned, seen = ms it came online }
+local props_loaded, next_props_check = false, 0
+local PROPS_KEY, PROPS_SETTLE = "talker_props", 1500
+
+local function props_save()
+	local parts = {}
+	for id, p in pairs(props) do
+		table.insert(parts, string.format("%d:%.3f:%.3f:%.3f:%d:%d", id, p.x, p.y, p.z, p.af and 1 or 0, p.pinned and 1 or 0))
+	end
+	pcall(xr_logic.pstor_store, db.actor, PROPS_KEY, table.concat(parts, ";"))
+end
+
+local function props_load()
+	props_loaded = true
+	local ok, s = pcall(xr_logic.pstor_retrieve, db.actor, PROPS_KEY, "")
+	if not ok or type(s) ~= "string" then return end
+	for item in string.gmatch(s, "[^;]+") do
+		local id, x, y, z, af, pinned = string.match(item, "^(%d+):([-%d.]+):([-%d.]+):([-%d.]+):(%d):(%d)$")
+		if id then
+			props[tonumber(id)] = { x = tonumber(x), y = tonumber(y), z = tonumber(z), af = af == "1", pinned = pinned == "1" }
+		end
+	end
+end
+
+local function prop_add(se, p, af)
+	if se and se.id then props[se.id] = { x = p.x, y = p.y, z = p.z, af = af, pinned = false }; props_save() end
+end
+
+local function pin(obj)  -- every piece of its physics fixed where it is
+	local shell = obj:get_physics_shell()
+	if not shell then return end
+	for i = 0, shell:get_elements_number() - 1 do
+		local el = shell:get_element_by_order(i)
+		if el and not el:is_fixed() then el:fix() end
+	end
+end
+
+local function update_prop(id, p, now)
+	local obj = level.object_by_id(id)
+	if not obj then
+		p.seen = nil
+		if not alife():object(id) then props[id] = nil; return true end  -- gone for good (just offline: kept)
+		return false
+	end
+	local holder = obj:parent()
+	if holder then  -- picked up: back on the ground where it lay
+		holder:drop_item_and_teleport(obj, vector():set(p.x, p.y, p.z))
+		p.seen = now
+		return false
+	end
+	if p.af then obj:get_artefact():SwitchVisibility(true) end  -- every second: never hides (it would after 5 s)
+	p.seen = p.seen or now
+	if not p.pinned and now - p.seen < PROPS_SETTLE then return false end  -- let it settle on the ground first
+	local changed = false
+	if not p.pinned then
+		local pos = obj:position()
+		p.x, p.y, p.z, p.pinned, changed = pos.x, pos.y, pos.z, true, true
+	end
+	pin(obj)  -- again each time: a drop or coming back online makes new, loose physics
+	return changed
+end
+
+local function update_props()
+	local now, changed = time_global(), false
+	for id, p in pairs(props) do
+		local ok, res = pcall(update_prop, id, p, now)
+		if not ok then log_error("prop " .. tostring(id) .. ": " .. tostring(res))
+		elseif res then changed = true end
+	end
+	if changed then props_save() end
+end
+
 local function zone_event(text, save)
 	if not zone_seeded then zone_seeded = true; math.randomseed(os.time()) end
 	local what, caption, msg = string.match(text, "^([^|]*)|([^|]*)|(.*)$")
@@ -1123,10 +1199,10 @@ local function zone_event(text, save)
 		end
 		for _, side in ipairs(SUSLOV_BALLS) do
 			local p, lv = at(SUSLOV_AHEAD, side)
-			alife():create("af_fireball", p, lv, gv)
+			prop_add(alife():create("af_fireball", p, lv, gv), p, true)
 		end
 		local p, lv = at(SUSLOV_AHEAD + SUSLOV_SHAFT, 0)
-		alife():create("kolbasa", p, lv, gv)
+		prop_add(alife():create("kolbasa", p, lv, gv), p, false)
 		say()
 		done.ok, done.section = true, "af_fireball x2, kolbasa"
 		return append_event(done)
@@ -1506,6 +1582,12 @@ function update(delta)
 		local okz, errz = pcall(update_zone)
 		if not okz then log_error("zone: " .. tostring(errz)) end
 	end
+	if not props_loaded then props_load() end
+	if next(props) and now >= next_props_check then
+		next_props_check = now + 1000
+		local okp, errp = pcall(update_props)
+		if not okp then log_error("props: " .. tostring(errp)) end
+	end
 	if next(looks) then
 		local okl, errl = pcall(update_looks)
 		if not okl then log_error("looks: " .. tostring(errl)) end
@@ -1564,11 +1646,13 @@ function on_npc_use(npc, who)
 end
 
 function on_item_take(obj)
+	if obj and props[obj:id()] then next_props_check = 0; return end  -- a «Шари Суслова» prop: it goes back
 	if not db.actor or not obj or not isArtefact(obj) then return end
 	append_event({ type = "artifact", name = item_title(obj:section()) or obj:section() })
 end
 
 function on_actor_spawn()
+	props, props_loaded = {}, false  -- read again from this save
 	append_event({ type = "game_loaded" })
 end
 
