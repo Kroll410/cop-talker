@@ -1,6 +1,6 @@
 """«Вова Віст»: a reward the streamer makes on Twitch (the app never creates it) and picks in Settings. A redemption goes
 to the game at once, no Zone queue; the game spawns a soldier named «Вова Віст» with «Свистілка Вови Віста», a PKM that
-fires 100x as fast and does 1000x less damage (game side checked in tools/zone_lua.py, run by test_zone.py).
+fires 100x as fast and does 10x less damage (game side checked in tools/zone_lua.py, run by test_zone.py).
 
 Here: the app side, the gun's section and name against the installed game's own configs (skipped without the game),
 and install_mod.ps1 / uninstall_mod.ps1 on a throwaway game folder (they add and take out one #include line).
@@ -172,8 +172,8 @@ else:
         check(float(get("wpn_vova_vist", "rpm")) == rpm * 100, f"fires 100x as fast ({rpm:g} -> {get('wpn_vova_vist', 'rpm')})")
         pkm_hit = [float(x) for x in get("wpn_pkm", "hit_power").split(",")]
         vova_hit = [float(x) for x in get("wpn_vova_vist", "hit_power").split(",")]
-        check(len(vova_hit) == 4 and all(abs(v - p / 1000) < 1e-12 for v, p in zip(vova_hit, pkm_hit)),
-              f"does 1000x less damage ({pkm_hit} -> {vova_hit})")
+        check(len(vova_hit) == 4 and all(abs(v - p / 10) < 1e-12 for v, p in zip(vova_hit, pkm_hit)),
+              f"does 10x less damage ({pkm_hit} -> {vova_hit})")
         check(get("wpn_vova_vist", "inv_name") == "st_wpn_vova_vist" and get("wpn_vova_vist", "ammo_mag_size") == "5000",
               "its own name and a 5000-round belt")
         check(get("wpn_vova_vist", "$npc") == "on" and get("wpn_vova_vist", "ammo_class") == "ammo_pkm_100",

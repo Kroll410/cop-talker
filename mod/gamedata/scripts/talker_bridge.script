@@ -1240,7 +1240,7 @@ local function ground_ahead(actor)
 end
 
 -- «Вова Віст» (Twitch reward): a soldier (військовий) whose machine gun, wpn_vova_vist (configs\talker_items.ltx, added
--- by install_mod.ps1), fires 100x as fast as a PKM and does 1000x less damage. He stays neutral to the player and is at
+-- by install_mod.ps1), fires 100x as fast as a PKM and does 10x less damage. He stays neutral to the player and is at
 -- war with every other man and mutant within VOVA_RANGE metres. His belt is kept full, so he never stops to reload.
 -- Kept with the save (the player's pstor), so it holds after a reload too.
 VOVA_GUN, VOVA_BELT, VOVA_RANGE = "wpn_vova_vist", 5000, 60

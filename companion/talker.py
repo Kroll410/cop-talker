@@ -398,8 +398,15 @@ def slur_level(npc):
     return "common" if community in SLUR_COMMON else "rare"
 
 
-SLUR_ANSWER = (" If someone throws a slur at you or a friend (\"жид\", \"підар\"...), you react like a real man: "
+SLUR_ANSWER = (" If someone throws a slur at you or a friend (\"жид\", \"підар\", \"негр\"...), you react like a real man: "
                "take offence, snap back, threaten, or brush it off with contempt.")
+
+
+# The street slurs a bandit picks from, so it isn't the same word every time. «Негростан» is a made-up country
+# («вали у свій Негростан»). All of them are caught by SLUR_STEMS below, so nobody else says them often.
+SLUR_VARIANTS = ("«підар», «підор», «підарас», «підорас», «підарасік», «підорлик», «підарок», «підріла», «негр», "
+                 "«негрик», «негрятко», «негрило», «негер», «нігер», «ніга», «негроїд», «Негростан» (a made-up "
+                 "country: «вали у свій Негростан»), «жид», «чмо»")
 
 
 def slur_note(npc):
@@ -407,10 +414,12 @@ def slur_note(npc):
     if level == "common":
         return (" Street slurs like «підар», «негр», «жид», «чмо» are part of your everyday vocabulary: you throw them "
                 "at people as insults all the time, like the game's bandits («жид» at anyone stingy, greedy or "
-                "haggling over money). Never preach hate about whole groups.")
+                "haggling over money). Vary them, never the same word twice in a row: " + SLUR_VARIANTS + ". "
+                "Never preach hate about whole groups.")
     if level == "rare":
-        return (" Street slurs like «підар» or «жид» are not your usual talk: only very rarely, when you are really "
-                "angry or mocking someone. Never preach hate about whole groups." + SLUR_ANSWER)
+        return (" Street slurs like «підар», «негр» or «жид» are not your usual talk: only very rarely, when you are "
+                "really angry or mocking someone, and then not always the same word. Never preach hate about whole "
+                "groups." + SLUR_ANSWER)
     if not is_monolith(npc or {}):
         return SLUR_ANSWER
     return ""
@@ -608,7 +617,9 @@ def npc_brief(n):
 
 
 # Stems of slurs against real groups. A line with one is regenerated unless this man may say it.
-SLUR_STEMS = re.compile(r"(?<![^\W\d_])(жид|негр|нігер|ніґер|хач|чурк|підар|підор|пидор|пидар|педик|гомік|гомик|даун)", re.I)
+# негер but not «негерметичний»; нігер but not the country «Нігерія»; ніга only as a whole word.
+SLUR_STEMS = re.compile(r"(?<![^\W\d_])(жид|негр|негер(?!мет)|ні[гґ]ер(?!і[яюїєй])|ні[гґ]а(?![^\W\d_])|хач|чурк|"
+                        r"підар|підор|підріл|пидор|пидар|педик|гомік|гомик|даун)", re.I)
 
 
 def has_slur(text, npc=None):
@@ -3878,7 +3889,7 @@ class Talker:
 
     def on_vova(self, user, redemption=None):
         """«Вова Віст»: a soldier (військовий) of that name turns up near the player, at once, with a machine gun that
-        fires 100x as fast and does 1000x less damage («Свистілка Вови Віста»). Neutral to the player, he opens fire
+        fires 100x as fast and does 10x less damage («Свистілка Вови Віста»). Neutral to the player, he opens fire
         on everyone else around. Needs script version 15 and the gun's section (install_mod.ps1)."""
         nick = zone.clean_nick(user)
         if self.redeem_blocked(user, f"{self.VOVA_NAME}", 15):

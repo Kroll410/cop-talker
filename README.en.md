@@ -121,7 +121,7 @@ Every reward except Speech and the Zone event goes off at once, with no queue. A
 | Zone event | `TWITCH_ZONE_REWARD` | A random gift, stalker or mutant pack, queued (below) |
 | «Шари Суслова» | `TWITCH_SUSLOV_REWARD` | Two «Вогняна куля» and a «Ковбаса» land in front of you, in a well-known shape |
 | «Хуй будеш?» | `TWITCH_GIANT_REWARD` | A hostile pseudogiant turns up 15–30 m away and comes for you |
-| «Вова Віст» | `TWITCH_VOVA_REWARD` | A soldier with «Свистілка Вови Віста», a PKM that fires 100× as fast for 1000× less damage |
+| «Вова Віст» | `TWITCH_VOVA_REWARD` | A soldier with «Свистілка Вови Віста», a PKM that fires 100× as fast for 10× less damage |
 | «Анекдот» | `TWITCH_ANEKDOT_REWARD` | A «Хліб», a «Ковбаса» and 12 bolts land in front of you; nobody can keep them |
 | «Гоша» | `TWITCH_GOSHA_REWARD` | A hostile Mercenary named «Гоша» with a plain SPAS-12, 15–30 m away |
 | «62» | `TWITCH_62_REWARD` | «шиісят два» shouted 10 times from all round you |

@@ -27,6 +27,22 @@ ok &= check("react" in talker.slur_note(scientist) and "жид" not in talker.sl
             "a scientist never says it but reacts to it")
 ok &= check(not talker.has_slur("Ти жид, братан", bandit), "a bandit may say it")
 
+# every variant is caught (a scientist never says one; a bandit may), and ordinary words are not
+VARIANTS = ["негр", "негрятко", "негрик", "негрило", "негер", "нігер", "ніга", "Негростан", "негроїд", "підарок",
+            "підріла", "підарасік", "підорлик", "підор", "підар", "підарас", "підорас", "Нігери", "Ніга"]
+missed = [w for w in VARIANTS if not talker.has_slur(f"Слухай, {w}, вали звідси", scientist)]
+ok &= check(not missed, f"every slur variant is caught {missed}")
+ok &= check(all(not talker.has_slur(f"Слухай, {w}, вали звідси", bandit) for w in VARIANTS), "a bandit may say each")
+CLEAN = ["негайно", "негерметичний костюм", "нігті", "підрозділ", "підрив", "Нігерія", "в Нігерії", "наша нога",
+         "ні гадки"]
+caught = [w for w in CLEAN if talker.SLUR_STEMS.search(w)]
+ok &= check(not caught, f"ordinary words aren't slurs {caught}")
+note = talker.slur_note(bandit)
+ok &= check(all(w in note for w in ("підорлик", "негрило", "Негростан", "підріла")) and "Vary" in note,
+            "a bandit gets the whole list and is told to vary it")
+ok &= check("негр" in talker.slur_note(stalker) and "Vary" not in talker.slur_note(stalker),
+            "a stalker: rare, no list")
+
 # the voice: a bandit's Russian stays, a stalker's stray Russian letters are fixed
 sent, voiced = [], []
 t = talker.Talker.__new__(talker.Talker)
