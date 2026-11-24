@@ -14,3 +14,36 @@ silencer_hit_power      = 0.00055, 0.00055, 0.00055, 0.00055
 ammo_mag_size           = 5000
 ammo_elapsed            = 5000
 cost                    = 500                           ; a toy, not a 20000 loot prize
+
+; Vova Vist himself: an ordinary army soldier (the same keys as sim_default_military_2, which the game reads only after
+; this file, so it can't be the parent) who never lets go of the trigger: a stock soldier fires a machine gun in bursts
+; of 1-6 with 1-4 s pauses, which at 52500 rpm is a few hundredths of a second of fire. The engine reads these from the
+; man's own section.
+[talker_vova_soldier]:stalker
+character_profile       = sim_default_military_2
+spec_rank               = experienced
+community               = military
+auto_min_queue_size_far         = 5000
+auto_max_queue_size_far         = 5000
+auto_min_queue_interval_far     = 50
+auto_max_queue_interval_far     = 150
+auto_min_queue_size_medium      = 5000
+auto_max_queue_size_medium      = 5000
+auto_min_queue_interval_medium  = 50
+auto_max_queue_interval_medium  = 150
+auto_min_queue_size_close       = 5000
+auto_max_queue_size_close       = 5000
+auto_min_queue_interval_close   = 50
+auto_max_queue_interval_close   = 150
+mchg_min_queue_size_far         = 5000
+mchg_max_queue_size_far         = 5000
+mchg_min_queue_interval_far     = 50
+mchg_max_queue_interval_far     = 150
+mchg_min_queue_size_medium      = 5000
+mchg_max_queue_size_medium      = 5000
+mchg_min_queue_interval_medium  = 50
+mchg_max_queue_interval_medium  = 150
+mchg_min_queue_size_close       = 5000
+mchg_max_queue_size_close       = 5000
+mchg_min_queue_interval_close   = 50
+mchg_max_queue_interval_close   = 150

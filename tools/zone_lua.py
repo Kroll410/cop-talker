@@ -528,10 +528,12 @@ function soldier(id, x, inv)
   db.storage[id] = { object = o }
   return o
 end
+AMMO, HOLDER = {}, {}
 function item(id, sec)
   SE[id] = SE[id] or { id = id }
   return { id = function() return id end, section = function() return sec end,
-    set_ammo_elapsed = function(_, n) table.insert(refills, id .. ':' .. n) end }
+    set_ammo_elapsed = function(self, n) table.insert(refills, id .. ':' .. n); AMMO[id] = n end,
+    get_ammo_in_magazine = function() return AMMO[id] or 0 end, parent = function() return HOLDER[id] end }
 end
 """)
 take("created"); events(); take("news")
@@ -556,6 +558,8 @@ check(ev and ev[0]["ok"] and ev[0]["what"] == "vova" and ev[0]["name"] == "Во�
       f"done {ev}")
 check(any(x.startswith("Вова Віст|") for x in n), f"a PDA line under his name {n}")
 check(L.eval("pstor.talker_vova") == str(vid), "kept in the save")
+check(man and man[0]["sec"].startswith("sim_default_military_"),
+      "talker_items.ltx not installed: an ordinary soldier (bursts as usual)")
 gid = gun[0]["id"] if gun else -1
 L.execute(f"""V = soldier({vid}, 10, {{ item(900, 'wpn_ak74'), item(901, 'wpn_knife'), item(902, 'grenade_f1'),
   item({gid}, 'wpn_vova_vist'), item(903, 'bread'), item(904, 'wpn_binoc') }})
@@ -581,14 +585,28 @@ check(L.eval("V:relation(db.actor)") == L.eval("game_object.neutral"), "shot by 
 L.execute("on_actor_spawn(); take_refills()")
 step(1100)
 check(f"{gid}:5000" in list(L.eval("take_refills()").values()), "after a reload: still kept full (read back from the save)")
+L.execute(f"HOLDER[{gid}] = V; objs[{gid}] = V._inv[4]")
 L.execute("V._alive = false")
+L.execute("on_npc_death(V, nil)")
+check(L.eval(f"AMMO[{gid}]") == 100, f"he dies: his gun is cut to an ordinary belt of 100 (not 5000 rounds, ~72 kg) "
+      f"{L.eval(f'AMMO[{gid}]')}")
 step(1100)
 check((L.eval("pstor.talker_vova") or "") == "", "dead: forgotten")
+L.execute(f"AMMO[{gid}] = 5000; on_item_take(objs[{gid}])")
+check(L.eval(f"AMMO[{gid}]") == 100, "a full gun picked up some other way: cut to 100 too")
 L.execute("V._alive = true; HAVE.sim_default_military_2 = false")
 inbox("zone||vova|Вова Віст|t")
 step(300)
 ev = [e for e in events() if e.get("type") == "zone_done"]
 check(not take("created") and ev and not ev[0]["ok"] and ev[0]["reason"] == "no soldier", f"no soldier section: nothing spawned {ev}")
+L.execute("HAVE.talker_vova_soldier = true")
+inbox("zone||vova|Вова Віст|t")
+step(300)
+c, ev = take("created"), [e for e in events() if e.get("type") == "zone_done"]
+check(ev and ev[0]["ok"] and [x["sec"] for x in c][:1] == ["talker_vova_soldier"],
+      f"installed: our own soldier who fires non-stop {[x['sec'] for x in c]}")
+L.execute("HAVE.talker_vova_soldier = false")
+take("news")
 
 # «62»: the streamer's clip SIXTY_TWO_COUNT times at once, no autosave, each copy 3D at its own spot around the player
 # (one per slice of the circle, NEAR-FAR m), its own volume, pitch and delay; kept referenced until done, then let go

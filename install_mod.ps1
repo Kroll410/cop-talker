@@ -14,7 +14,10 @@ $src = Join-Path $PSScriptRoot 'mod\gamedata'
 New-Item -ItemType Directory -Force "$game\gamedata\scripts", "$game\gamedata\configs\scripts", "$game\gamedata\sounds\talker", "$game\talker" | Out-Null
 Copy-Item "$src\scripts\*.script" "$game\gamedata\scripts\" -Force
 Copy-Item "$src\configs\scripts\*.ltx" "$game\gamedata\configs\scripts\" -Force
-Copy-Item "$src\sounds\talker\*.ogg" "$game\gamedata\sounds\talker\" -Force  # silent clips that move NPC mouths, the 62 reward shout
+# silent clips that move NPC mouths, the 62 reward shout. A running game keeps them open: then they're left as they
+# are (they rarely change) and the rest still goes in
+try { Copy-Item "$src\sounds\talker\*.ogg" "$game\gamedata\sounds\talker\" -Force -ErrorAction Stop }
+catch { Write-Output "Sounds not updated (the game has them open; close it and reinstall if they changed)" }
 
 # Our own item sections (the Vova Vist reward's machine gun) and their names. The game reads every
 # configs\text\<language>\*.xml by itself; the sections need one #include line in configs\external.ltx, the file the
