@@ -123,7 +123,7 @@ NICE = {"STALKER_DIR": "Game folder", "SPEAK_MODE": "Speaking", "PTT_KEY": "Push
         "FUN_LEVEL": "Humour", "QUIRK_CHANCE": "Quirks", "MEMORY_KEEP": "Talks kept word for word",
         "CLEAR_MEMORY": "Clear memory on start", "OUTSIDE_TALK": "Talk about life outside", "NEWS_FEEDS": "News feeds",
         "TWITCH_ENABLED": "Twitch", "TWITCH_SOURCE": "Source", "TWITCH_CHANNEL": "Channel",
-        "TWITCH_QUEUE_MAX": "Messages waiting, at most", "TWITCH_REWARD": "Reward title", "TWITCH_COST": "Reward cost",
+        "TWITCH_QUEUE_MAX": "Messages waiting, at most", "TWITCH_REWARD": "Speech reward title",
         "TWITCH_UNPREFIXED": "Messages without $ or %", "TWITCH_DISTANCE": "NPC distance",
         "TWITCH_SHOW_NAME": "Nick in the PDA", "TWITCH_LINKS": "Viewer keeps his NPC", "TWITCH_BLOCKED": "Blocked words",
         "TWITCH_ZONE_REWARD": "Zone reward title", "TWITCH_ZONE_GAP": "Minutes between Zone events",
@@ -231,8 +231,7 @@ class SettingsTab(QWidget):
                 if key in REWARD_PICK:
                     field = QComboBox()
                     field.setEditable(True)  # Twitch not reachable now: the title can still be typed
-                    if key == "TWITCH_ZONE_REWARD":
-                        field.addItem("")  # empty = off
+                    field.addItem("")  # empty = none
                     if value:
                         field.addItem(value)
                     field.setCurrentText(value)
@@ -297,8 +296,7 @@ class SettingsTab(QWidget):
             current = f.currentText()
             f.blockSignals(True)
             f.clear()
-            if key == "TWITCH_ZONE_REWARD":
-                f.addItem("")
+            f.addItem("")
             f.addItems(titles)
             if current and current not in titles:
                 f.addItem(current)  # not on the channel (yet): keep it, the helper creates or waits for it
@@ -414,8 +412,9 @@ class Window(QMainWindow):
             "<li><b>chat</b> mode (default, no Affiliate needed): a chat message starting with <b>$</b> is said "
             "word for word, one starting with <b>%</b> is retold by the NPC his own way. Other messages are "
             "ignored (Settings → TWITCH_UNPREFIXED). A random NPC near you says it; nobody near? It waits.</li>"
-            "<li><b>reward</b> mode (Settings → Twitch → TWITCH_SOURCE): only a channel-points reward with a "
-            "message, created for you; needs Affiliate/Partner.</li></ol>")
+            "<li><b>reward</b> mode (Settings → Twitch → TWITCH_SOURCE): make a channel-points reward with a "
+            "message on Twitch yourself and pick it in Settings → TWITCH_REWARD (the app never creates rewards); "
+            "needs Affiliate/Partner.</li></ol>")
         guide.setOpenExternalLinks(True)
         guide.setWordWrap(True)
         guide.setMaximumWidth(760)
@@ -423,6 +422,12 @@ class Window(QMainWindow):
         tl.addWidget(self.twitch_queue)
         tl.addLayout(auth_row)
         tl.addWidget(self.twitch_code)
+        # Rewards an older version created on the channel: shown with a Delete button (asks first)
+        self.app_rewards_box = QWidget()
+        self.app_rewards_row = QHBoxLayout(self.app_rewards_box)
+        self.app_rewards_row.setContentsMargins(0, 0, 0, 0)
+        self.app_rewards_box.hide()
+        tl.addWidget(self.app_rewards_box)
         # Zone reward: what's waiting (rolled at redemption) and debug buttons that need no real redemption
         zone_title = QLabel("Zone events (Settings → TWITCH_ZONE_REWARD)")
         self.zone_queue = QLabel("Nothing waiting")
@@ -431,7 +436,7 @@ class Window(QMainWindow):
         zone_row = QHBoxLayout()
         for text, arg, tip in (
                 ("Redeem (debug)", "redeem", "As if a viewer redeemed the Zone reward: rolled now, a PDA notice, "
-                                             "goes off after the usual 5-7 minutes."),
+                                             "queued like a real one (first in the queue: at once)."),
                 ("Now: Дар", "gift", "A random item in your backpack, right now."),
                 ("Now: Життя", "life", "A random stalker, friend or enemy, right now."),
                 ("Now: Дитя", "child", "Mutants come for you, right now."),
@@ -527,6 +532,33 @@ class Window(QMainWindow):
         self.proc.write(b"rewards" + bytes([10]))
         return True
 
+    def show_app_rewards(self, rewards):
+        while self.app_rewards_row.count():
+            w = self.app_rewards_row.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        if not rewards:
+            self.app_rewards_box.hide()
+            return
+        note = QLabel("Made by StalkerTalker on your channel:")
+        note.setObjectName("secondary")
+        self.app_rewards_row.addWidget(note)
+        for rw in rewards:
+            btn = QPushButton(f"Delete «{rw['title']}»")
+            btn.setToolTip("Removes this reward from your Twitch channel (asks first)")
+            btn.clicked.connect(lambda _=False, r=rw: self.delete_app_reward(r))
+            self.app_rewards_row.addWidget(btn)
+        self.app_rewards_row.addStretch()
+        self.app_rewards_box.show()
+
+    def delete_app_reward(self, rw):
+        if not self.proc:
+            return
+        sure = QMessageBox.question(self, "StalkerTalker", f"Delete the reward «{rw['title']}» from your Twitch "
+                                    "channel? Redemptions waiting in its queue go with it. This can't be undone.")
+        if sure == QMessageBox.Yes:
+            self.proc.write(f"delete_reward {rw['id']}".encode() + bytes([10]))
+
     def send_zone(self, arg):
         """Debug: tell the helper to fire (or queue) a Zone event without a real Twitch redemption."""
         if not self.proc:
@@ -602,6 +634,11 @@ class Window(QMainWindow):
         elif kind == "REWARDS":
             try:
                 self.settings.set_rewards(json.loads(text))
+            except ValueError:
+                pass
+        elif kind == "APP_REWARDS":
+            try:
+                self.show_app_rewards(json.loads(text))
             except ValueError:
                 pass
         elif kind == "REWARDS_ERROR":

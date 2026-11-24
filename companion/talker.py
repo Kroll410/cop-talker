@@ -237,8 +237,8 @@ TWITCH_SOURCE = os.environ.get("TWITCH_SOURCE", "chat").lower()  # chat (every m
 TWITCH_CHANNEL = os.environ.get("TWITCH_CHANNEL", "")
 TWITCH_QUEUE_MAX = int(os.environ.get("TWITCH_QUEUE_MAX", "20"))  # busy chat: oldest waiting messages are dropped
 TWITCH_ENABLED = os.environ.get("TWITCH_ENABLED", "1") != "0" and bool(TWITCH_CLIENT_ID)
-TWITCH_REWARD = os.environ.get("TWITCH_REWARD", "Скажи через сталкера")
-TWITCH_COST = int(os.environ.get("TWITCH_COST", "500"))
+# reward mode: the title of a reward with a message you made on Twitch (the app never creates one). Empty = none
+TWITCH_REWARD = os.environ.get("TWITCH_REWARD", "").strip()
 # Chat prefixes: "$text" = said word for word, "%text" = the NPC retells it his own way.
 # Messages without a prefix: ignore (normal chat stays quiet), verbatim or character.
 TWITCH_UNPREFIXED = os.environ.get("TWITCH_UNPREFIXED", "ignore").lower()
@@ -249,7 +249,7 @@ TWITCH_LINKS = os.environ.get("TWITCH_LINKS", "1") != "0"
 TWITCH_BLOCKED = [w.strip().lower() for w in os.environ.get("TWITCH_BLOCKED", "").split(",") if w.strip()]
 # Zone events: the title of a channel-points reward you made on Twitch (no message). Empty = off.
 TWITCH_ZONE_REWARD = os.environ.get("TWITCH_ZONE_REWARD", "").strip()
-TWITCH_ZONE_GAP = os.environ.get("TWITCH_ZONE_GAP", "5-7")  # minutes between two Zone events
+TWITCH_ZONE_GAP = os.environ.get("TWITCH_ZONE_GAP", "5-7")  # minutes between two Zone events; 0 = at once
 
 LEVELS = {"zaton": "Затон", "jupiter": "Юпітер", "pripyat": "Прип'ять",
           "labx8": "лабораторія X8", "jupiter_underground": "шляхопровід «Прип'ять-1»"}
@@ -2901,7 +2901,7 @@ class Talker:
         if TWITCH_ENABLED:
             from twitch import Twitch
             self.twitch = Twitch(TWITCH_CLIENT_ID, TWITCH_REWARD, ROOT / "twitch_token.json", self.on_twitch, log,
-                                 reward_cost=TWITCH_COST, on_code=lambda url, code: report("TWITCH_CODE", f"{url}|{code}"),
+                                 on_code=lambda url, code: report("TWITCH_CODE", f"{url}|{code}"),
                                  source=TWITCH_SOURCE, channel=TWITCH_CHANNEL,
                                  zone_title=TWITCH_ZONE_REWARD, on_zone=self.on_zone)
             self.twitch.start()
@@ -3810,12 +3810,14 @@ class Talker:
 
     # ------------------------------------------------------------ Zone reward (companion/zone.py)
     def on_zone(self, user, redemption=None):
-        """A viewer redeemed the Zone reward: rolled now, done when its turn comes (5-7 min apart)."""
+        """A viewer redeemed the Zone reward: rolled now; first in the queue goes off at once, the others
+        each wait TWITCH_ZONE_GAP minutes after the one before."""
         item = self.zone.add(user, time.time())
-        wait = max(1, round((item["due"] - time.time()) / 60))
-        log(f"Twitch: {user} redeemed the Zone reward -> {zone.label(item)} (in ~{wait} min, "
-            f"waiting: {len(self.zone.items)})")
-        self.game.send("twitch", None, f"{zone.clean_nick(user)}: Зона почула тебе. Щось станеться за ~{wait} хв")
+        wait = item["due"] - time.time()
+        when = "now" if wait < 30 else f"in ~{max(1, round(wait / 60))} min"
+        log(f"Twitch: {user} redeemed the Zone reward -> {zone.label(item)} ({when}, waiting: {len(self.zone.items)})")
+        soon = "Щось станеться просто зараз" if wait < 30 else f"Щось станеться за ~{max(1, round(wait / 60))} хв"
+        self.game.send("twitch", None, f"{zone.clean_nick(user)}: Зона почула тебе. {soon}")
         self.report_zone(force=True)
 
     def zone_test(self, kind=None):
@@ -3866,6 +3868,21 @@ class Talker:
             report("REWARDS", json.dumps(self.twitch.list_rewards(), ensure_ascii=False))
         except Exception as exc:
             report("REWARDS_ERROR", str(exc)[:160])
+        self.report_app_rewards()
+
+    def report_app_rewards(self):
+        """Rewards an older version of this app created on the channel: the window offers to delete them."""
+        try:
+            report("APP_REWARDS", json.dumps(self.twitch.app_rewards() if self.twitch else [], ensure_ascii=False))
+        except Exception as exc:
+            log(f"Twitch: couldn't list the app's own rewards ({str(exc)[:100]})")
+
+    def delete_app_reward(self, reward_id):
+        if not self.twitch:
+            return
+        why = self.twitch.delete_reward(reward_id)
+        log("Twitch: reward deleted from the channel" if why is None else f"Twitch: reward not deleted ({why})")
+        self.report_app_rewards()
 
     def report_zone(self, force=False):
         """The queue for the window's Twitch tab (each line: what, whose, in how many seconds)."""
@@ -4190,9 +4207,11 @@ class Talker:
                         break
                     if line.strip() == "rewards":  # the window's Refresh next to a reward title
                         threading.Thread(target=self.report_rewards, daemon=True).start()
+                    if line.startswith("delete_reward "):  # the window's Delete, after the user confirmed it
+                        threading.Thread(target=self.delete_app_reward, args=(line.split()[1],), daemon=True).start()
                     if line.startswith("zone"):  # the window's debug buttons
                         arg = line.split()[-1]
-                        if arg == "redeem":  # as if a viewer redeemed it: queued, PDA notice, 5-7 min
+                        if arg == "redeem":  # as if a viewer redeemed it: queued like a real one, PDA notice
                             self.on_zone((self.twitch.login if self.twitch and self.twitch.login else None) or "test")
                         else:  # "zone gift|life|child|any": at once
                             self.zone_test(arg)

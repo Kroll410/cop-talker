@@ -1,5 +1,6 @@
 """The Twitch Zone reward (companion/zone.py, twitch.py, talker.py, the game script v14), offline:
-the 25/50/25 roll, packs of weak mutants and lone strong ones, the 5-7 min queue (kept across restarts, test
+the 25/50/25 roll, packs of weak mutants and lone strong ones, the queue (first at once, the rest 5-7 min apart,
+gap 0 = all at once; kept across restarts, test
 buttons at once), Twitch routing of the reward, the app's side (PDA notice, the game line, the viewer linked to
 his man until he dies, retries) and the game script itself in LuaJIT (tools/zone_lua.py)."""
 import os
@@ -66,22 +67,34 @@ try:
         for line in zone.command(zone.roll("Ю|зер\n", kind, random.Random(3))):
             line.encode("cp1251")  # the game reads cp1251: every sign must exist there
     check(zone.clean_nick("Ю|зер\n") == "Юзер", "a nickname can't break the line ('|', new lines)")
-    check(zone.parse_gap("5-7") == (300, 420) and zone.parse_gap("3") == (180, 180), "TWITCH_ZONE_GAP parsed")
+    check(zone.parse_gap("5-7") == (300, 420) and zone.parse_gap("3") == (180, 180) and zone.parse_gap("0") == (0, 0),
+          "TWITCH_ZONE_GAP parsed")
 
     # ------------------------------------------------------------ the queue
     q = zone.ZoneQueue(tmp / "q.json", (300, 420), random.Random(4))
     a = q.add("one", 1000)
     b = q.add("two", 1010)
-    check(1300 <= a["due"] <= 1420, f"first: 5-7 min after the redemption ({a['due'] - 1000:.0f} s)")
-    check(b["due"] - a["due"] >= 300, f"second: 5-7 min after the first ({b['due'] - a['due']:.0f} s)")
-    check(q.pop_due(1299) is None, "nothing goes off early")
+    check(a["due"] == 1000, "gap 5-7, empty queue: the first redemption goes off at once")
+    check(300 <= b["due"] - a["due"] <= 420, f"a second one behind it waits 5-7 min ({b['due'] - a['due']:.0f} s)")
+    check(q.pop_due(999) is None, "nothing goes off before its redemption")
     late = a["due"] + 600  # the game was paused: the first goes off late...
     check(q.pop_due(late) is a, "the first goes off when its time comes")
     check(q.items[0]["due"] >= late + 300, "...and the second still waits 5-7 min after it")
     t1 = q.add_test("me", late + 1, "child")
     check(q.pop_due(late + 1) is t1 and q.items[0] is b, "a test goes off at once and leaves the real one waiting")
+    check(q.pop_due(late + 1 + 299) is None, "the second doesn't go off early")
     q2 = zone.ZoneQueue(tmp / "q.json")
     check([i["user"] for i in q2.items] == ["two"], "the queue survives a restart of the app")
+    q0 = zone.ZoneQueue(tmp / "q0.json", zone.parse_gap("0"), random.Random(6))
+    z = [q0.add(u, 50) for u in ("a", "b", "c")]
+    check([i["due"] for i in z] == [50, 50, 50], "gap 0: every redemption is due at once")
+    check([q0.pop_due(50)["user"] for _ in range(3)] == ["a", "b", "c"] and q0.pop_due(50) is None,
+          "gap 0: they all go off right away, in order, no spacing")
+    q1 = zone.ZoneQueue(tmp / "q1.json", (300, 420), random.Random(7))
+    first = q1.add("x", 10)
+    q1.pop_due(10)
+    later = q1.add("y", 70)  # a minute after the first went off, the queue is empty again
+    check(later["due"] == 70, "gap 5-7: first in an empty queue again -> at once")
     c = q.add("three", late + 2, "life")
     side = c["side"]
     q.items = [c]
@@ -122,12 +135,18 @@ try:
     t.twitch_links, t.twitch_names, t.zone_links, t.left_npc = {}, {}, set(), {}
     t.LINKS_FILE = tmp / "links.json"
     t.on_zone("Viewer")
-    check(len(t.zone.items) == 1 and sent and sent[0][0] == "twitch" and "Зона почула тебе" in sent[0][2],
+    t.on_zone("Second")
+    check(len(t.zone.items) == 2 and sent and sent[0][0] == "twitch" and "Зона почула тебе" in sent[0][2],
           f"redemption: queued, PDA notice {sent}")
+    check("просто зараз" in sent[0][2] and "за ~" in sent[1][2], f"first: 'right now', second: 'in ~N min' {sent}")
     sent.clear()
     state = {"mod_version": 14, "actor": {"health": 1}}
     t.zone_tick(state)
-    check(not sent, "not yet: it waits its 5-7 minutes")
+    check(len(sent) == 1 and sent[0][0] == "zone" and [i["user"] for i in t.zone.items] == ["Second"],
+          f"the first goes off at the next check, the second waits {sent}")
+    sent.clear()
+    t.zone_tick(state)
+    check(not sent, "the second waits its 5-7 minutes")
     t.zone.items[0]["due"] = 0
     t.zone_tick(dict(state, mod_version=13))
     check(not sent and t.zone.items, "an old game script (v13) gets nothing: it would ignore the line")

@@ -1,4 +1,5 @@
 """Twitch bridge: chat messages (testing) or a channel-points reward with a message go to an NPC in the game.
+The app never creates rewards: the channel owner makes them on Twitch and picks their titles in Settings.
 A second reward, made by the channel owner on Twitch (no message), can trigger a random Zone event (zone_title).
 
 Sign-in uses Twitch's device code flow (you open a link and type a code, no password ever reaches this app).
@@ -26,7 +27,7 @@ def channel_login(text):
 
 
 class Twitch:
-    def __init__(self, client_id, reward_title, token_file: Path, on_message, log, reward_cost=500,
+    def __init__(self, client_id, reward_title, token_file: Path, on_message, log,
                  on_code=None, source="reward", channel="", zone_title="", on_zone=None):
         self.client_id = client_id
         self.source = source if source in SCOPES else "reward"
@@ -39,8 +40,7 @@ class Twitch:
             self.scopes += " channel:read:redemptions"  # chat mode too: the Zone reward is on your own channel
         self.channel = channel_login(channel)  # chat mode: whose chat to read (empty = your own)
         self.channel_id = None
-        self.reward_title = reward_title
-        self.reward_cost = reward_cost
+        self.reward_title = (reward_title or "").strip()  # reward mode: the speech reward's title; empty = none
         self.token_file = token_file
         self.on_message = on_message  # fn(user, text, redemption) -> None
         self.log = log
@@ -131,7 +131,11 @@ class Twitch:
 
     # ------------------------------------------------------------ reward
     def find_reward(self):
-        """Use the reward with our title. If it doesn't exist, create it (needs Affiliate/Partner)."""
+        """Find the speech reward by its title (made by the channel owner on Twitch). Never creates one."""
+        self.reward_id, self.reward_owned = None, False
+        if not self.reward_title:
+            self.log("Twitch: no speech reward set (Settings → TWITCH_REWARD): viewers speak through chat only")
+            return
         mine = self.helix("GET", "/channel_points/custom_rewards",
                           params={"broadcaster_id": self.user_id, "only_manageable_rewards": "true"})
         for rw in mine.json().get("data", []) if mine.status_code == 200 else []:
@@ -143,15 +147,29 @@ class Twitch:
             if rw["title"].strip().lower() == self.reward_title.strip().lower():
                 self.reward_id, self.reward_owned = rw["id"], False  # made by hand on Twitch: we only listen
                 return
-        r = self.helix("POST", "/channel_points/custom_rewards", params={"broadcaster_id": self.user_id}, json={
-            "title": self.reward_title, "cost": self.reward_cost, "is_user_input_required": True,
-            "prompt": "Напиши, що має сказати сталкер у грі (до 200 символів)."})
-        if r.status_code == 200:
-            self.reward_id, self.reward_owned = r.json()["data"][0]["id"], True
-            self.log(f"Twitch: created reward «{self.reward_title}» ({self.reward_cost} points)")
-        else:
-            self.log(f"Twitch: couldn't find or create reward «{self.reward_title}» ({r.text[:120]}). "
-                     "Listening to all rewards with a message.")
+        self.log(f"Twitch: no reward «{self.reward_title}» on your channel yet (create it on Twitch, with a "
+                 "message). Listening for it by title.")
+
+    def app_rewards(self):
+        """Rewards this app created earlier (only those can be deleted from here): [{"id", "title"}]."""
+        if not self.user_id:
+            return []
+        r = self.helix("GET", "/channel_points/custom_rewards",
+                       params={"broadcaster_id": self.user_id, "only_manageable_rewards": "true"})
+        return [{"id": rw["id"], "title": rw["title"]} for rw in r.json().get("data", [])] if r.status_code == 200 else []
+
+    def delete_reward(self, reward_id):
+        """Remove a reward this app created from the channel. Returns None if done, else Twitch's reason."""
+        r = self.helix("DELETE", "/channel_points/custom_rewards",
+                       params={"broadcaster_id": self.user_id, "id": reward_id})
+        if r.status_code == 204:
+            if reward_id == self.reward_id:
+                self.reward_id, self.reward_owned = None, False
+            return None
+        try:
+            return (r.json().get("message") or r.text)[:150]
+        except ValueError:
+            return r.text[:150] or str(r.status_code)
 
     def list_rewards(self):
         """Titles of all channel-points rewards of your channel (made here or by hand on Twitch)."""
@@ -215,7 +233,7 @@ class Twitch:
                 "transport": {"method": "websocket", "session_id": session_id}})
             if r.status_code not in (200, 202, 409):  # 409: already subscribed, which is fine
                 raise RuntimeError(f"Twitch subscribe failed: {r.text[:200]}")
-        else:
+        elif self.reward_title:
             self.subscribe_redemptions(session_id, self.reward_id)
         if self.zone_title:
             self.subscribe_redemptions(session_id, self.zone_reward_id)
@@ -256,8 +274,9 @@ class Twitch:
                             self.log(f"Twitch connected as {self.login}, reading #{self.channel}: "
                                      "$message = said word for word, %message = retold by the NPC.")
                         else:
-                            self.status = f"on: {self.login}, reward «{self.reward_title}»{zone}"
-                            self.log(f"Twitch connected ({self.login}). Waiting for «{self.reward_title}».")
+                            say = f"reward «{self.reward_title}»" if self.reward_title else "no speech reward"
+                            self.status = f"on: {self.login}, {say}{zone}"
+                            self.log(f"Twitch connected ({self.login}). {say[0].upper() + say[1:]}{zone}.")
                     elif kind == "notification":
                         ev = msg["payload"]["event"]
                         sub_type = (msg["payload"].get("subscription") or {}).get("type", "")
@@ -284,10 +303,13 @@ class Twitch:
             self.zone_seen = (self.zone_seen + [ev.get("id")])[-200:]
             self.on_zone(user, ev)
             return
-        if self.source != "reward":
+        if self.source != "reward" or not self.reward_title:
             return
-        if self.reward_id and (ev.get("reward") or {}).get("id") != self.reward_id:
+        reward = ev.get("reward") or {}
+        if self.reward_id and reward.get("id") != self.reward_id:
             return  # another reward of the channel (the Zone subscription may listen to all of them)
+        if not self.reward_id and (reward.get("title") or "").strip().lower() != self.reward_title.lower():
+            return  # not made on Twitch yet when we connected: matched by title
         text = (ev.get("user_input") or "").strip()
         if text:
             self.on_message(user, text, ev)

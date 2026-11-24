@@ -1,6 +1,7 @@
 """Zone events: a Twitch channel-points reward (made by the channel owner, no message) makes something random
-happen in the game. Each redemption is rolled at once (so the window can show what's coming), waits in a queue,
-and goes off 5-7 minutes after the one before it (and after its own redemption):
+happen in the game. Each redemption is rolled at once (so the window can show what's coming) and goes into a queue. The first one in the queue
+goes off at once; the ones behind it each wait 5-7 minutes (TWITCH_ZONE_GAP) after the one before. Gap 0: all at
+once, no waiting:
 
   Дар Зони    (25%)  a random item of the game lands in your backpack
   Життя для Зони (50%) a random stalker appears 15-30 m away, half the time a friend who follows you, half an
@@ -45,7 +46,7 @@ def count_weights(r):
 
 
 def parse_gap(text):
-    """"5-7" (minutes) -> (300, 420) seconds; one number = exactly that."""
+    """"5-7" (minutes) -> (300, 420) seconds; one number = exactly that; "0" = no waiting at all."""
     nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", text or "")] or [5, 7]
     lo, hi = min(nums[0], nums[-1]), max(nums[0], nums[-1])
     return lo * 60, hi * 60
@@ -110,11 +111,11 @@ class ZoneQueue:
         return self.rng.uniform(*self.gap)
 
     def add(self, user, now, kind=None):
-        """A redemption: rolled now, due 5-7 min after the last one waiting (or after now)."""
+        """A redemption: rolled now. First in the queue: due at once; behind others: 5-7 min after the last."""
         with self.lock:
             item = roll(user, kind, self.rng)
-            last = max([i["due"] for i in self.items if not i.get("test")] + [now])
-            item["due"] = last + self.wait()
+            waiting = [i["due"] for i in self.items if not i.get("test")]
+            item["due"] = max(max(waiting) + self.wait(), now) if waiting else now
             self.items.append(item)
             self.save()
             return item
