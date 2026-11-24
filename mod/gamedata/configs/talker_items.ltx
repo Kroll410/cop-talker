@@ -11,6 +11,12 @@ inv_name_short          = st_wpn_vova_vist
 rpm                     = 52500                         ; wpn_pkm: 525
 hit_power               = 0.05, 0.05, 0.05, 0.05      ; wpn_pkm: 0.5 each
 silencer_hit_power      = 0.055, 0.055, 0.055, 0.055
+; never jams and never wears: a PKM loses 0.001 condition a shot, so at 875 shots a second it would be in the
+; jamming range (condition under 0.6) in half a second
+misfire_start_prob      = 0                             ; wpn_pkm: 0.002
+misfire_end_prob        = 0                             ; wpn_pkm: 0.03
+condition_shot_dec      = 0                             ; wpn_pkm: 0.001
+condition_queue_shot_dec = 0                            ; wpn_pkm: 0.0012
 ammo_mag_size           = 5000
 ammo_elapsed            = 5000
 cost                    = 500                           ; a toy, not a 20000 loot prize

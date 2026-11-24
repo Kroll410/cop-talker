@@ -174,6 +174,9 @@ else:
         vova_hit = [float(x) for x in get("wpn_vova_vist", "hit_power").split(",")]
         check(len(vova_hit) == 4 and all(abs(v - p / 10) < 1e-12 for v, p in zip(vova_hit, pkm_hit)),
               f"does 10x less damage ({pkm_hit} -> {vova_hit})")
+        check(all(float(get("wpn_vova_vist", k)) == 0 for k in ("misfire_start_prob", "misfire_end_prob",
+                                                                 "condition_shot_dec", "condition_queue_shot_dec")),
+              "never jams and never wears (misfire chances and wear per shot are 0)")
         check(get("wpn_vova_vist", "inv_name") == "st_wpn_vova_vist" and get("wpn_vova_vist", "ammo_mag_size") == "5000",
               "its own name and a 5000-round belt")
         check(get("wpn_vova_vist", "$npc") == "on" and get("wpn_vova_vist", "ammo_class") == "ammo_pkm_100",
