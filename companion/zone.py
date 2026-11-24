@@ -21,20 +21,21 @@ TITLES = {"gift": "Дар Зони", "life": "Життя для Зони", "chil
 
 # (name in Ukrainian, game sections (whichever the game has), r): the chance of n of them is r**(n-1), n = 1..10.
 # r > 1: packs are likely (tushkans); r = 0.68: ten pseudogiants come about once in 100 pseudogiant events.
+# Section names checked against the game's configs (configs.db + patches): only these exist there.
 MONSTERS = [
-    ("тушкан", ["tushkano_normal", "tushkano_weak", "tushkano_strong"], 1.3),
-    ("сліпий пес", ["dog_normal", "dog_weak", "dog_strong"], 1.2),
-    ("плоть", ["flesh_normal", "flesh_weak", "flesh_strong"], 1.1),
-    ("кабан", ["boar_normal", "boar_weak", "boar_strong"], 0.95),
-    ("псевдособака", ["pseudodog_normal", "pseudodog_weak", "pseudodog_strong"], 0.9),
-    ("снорк", ["snork_normal", "snork_weak", "snork_strong"], 0.85),
-    ("пси-собака", ["psy_dog_normal", "psy_dog", "psy_dog_weak", "psy_dog_strong"], 0.75),
-    ("кровосос", ["bloodsucker_normal", "bloodsucker_weak", "bloodsucker_strong"], 0.75),
-    ("полтергейст", ["poltergeist_normal_flame", "poltergeist_normal_tele", "poltergeist_tele"], 0.75),
-    ("бюрер", ["burer_normal", "burer_weak", "burer_strong"], 0.72),
-    ("контролер", ["controller_normal", "controller_tubeman", "controller_weak"], 0.7),
-    ("химера", ["chimera_normal", "chimera_strong", "chimera_weak"], 0.7),
-    ("псевдогігант", ["gigant_normal", "gigant_strong", "gigant_weak"], 0.68),
+    ("тушкан", ["tushkano_normal"], 1.3),
+    ("сліпий пес", ["dog_weak", "dog_normal", "dog_strong"], 1.2),
+    ("плоть", ["flesh_normal", "flesh_strong"], 1.1),
+    ("кабан", ["boar_normal", "boar_strong"], 0.95),
+    ("псевдособака", ["pseudodog_normal"], 0.9),
+    ("снорк", ["snork_weak", "snork_normal", "snork_strong"], 0.85),
+    ("пси-собака", ["psy_dog_normal", "psy_dog"], 0.75),
+    ("кровосос", ["bloodsucker_weak", "bloodsucker_normal", "bloodsucker_strong"], 0.75),
+    ("полтергейст", ["m_poltergeist_normal_flame", "m_poltergeist_normal_tele"], 0.75),
+    ("бюрер", ["burer_normal"], 0.72),
+    ("контролер", ["m_controller_normal"], 0.7),
+    ("химера", ["chimera_normal"], 0.7),
+    ("псевдогігант", ["gigant_normal"], 0.68),
 ]
 MAX_TRIES = 3
 

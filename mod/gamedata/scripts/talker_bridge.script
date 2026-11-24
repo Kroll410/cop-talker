@@ -908,17 +908,21 @@ end
 --   life:ally:<nick>      a random stalker (any faction, rank, gear) appears 15-30 m away and follows you
 --   life:enemy:<nick>     ... and attacks you; both wear the viewer's nickname until they die
 --   child:<n>:<s1>,<s2>   n mutants (of whichever of these sections the game has) 25-50 m away, coming for you
--- Only sections the game really has are used; quest and dev items are never in the list.
+-- Only sections the game really has are used; quest and dev items are never in the list. Checked against the
+-- game's own configs (configs.db + patches): every item here exists, has a cost and no quest_item flag; unique
+-- named weapons (Nimble's orders, Snag's...) are left out so no quest finds them in your pack too early.
 local ZONE_ITEMS = {
 	"wpn_pm", "wpn_pb", "wpn_fort", "wpn_hpsa", "wpn_walther", "wpn_usp", "wpn_colt1911", "wpn_desert_eagle",
 	"wpn_sig220", "wpn_beretta", "wpn_bm16", "wpn_toz34", "wpn_wincheaster1300", "wpn_spas12", "wpn_protecta",
 	"wpn_ak74u", "wpn_ak74", "wpn_abakan", "wpn_groza", "wpn_val", "wpn_vintorez", "wpn_l85", "wpn_lr300",
 	"wpn_sig550", "wpn_g36", "wpn_fn2000", "wpn_mp5", "wpn_svd", "wpn_svu", "wpn_gauss", "wpn_rg-6", "wpn_rpg7",
 	"wpn_pkm", "wpn_addon_scope", "wpn_addon_scope_susat", "wpn_addon_silencer", "wpn_addon_grenade_launcher",
-	"wpn_addon_grenade_launcher_m203", "grenade_f1", "grenade_rgd5",
+	"wpn_addon_grenade_launcher_m203", "wpn_addon_scope_x2.7", "wpn_addon_scope_susat_x1.6",
+	"wpn_addon_scope_susat_custom", "wpn_addon_scope_susat_dusk", "wpn_addon_scope_susat_night",
+	"wpn_addon_scope_night", "wpn_binoc", "grenade_f1", "grenade_rgd5", "grenade_gd-05",
 	"ammo_9x18_fmj", "ammo_9x18_pmm", "ammo_9x19_fmj", "ammo_9x19_pbp", "ammo_11.43x23_fmj", "ammo_11.43x23_hydro",
-	"ammo_12x70_buck", "ammo_12x76_zhekan", "ammo_12x76_dart", "ammo_5.45x39_fmj", "ammo_5.45x39_ap",
-	"ammo_5.56x45_ss190", "ammo_5.56x45_ap", "ammo_7.62x54_7h1", "ammo_7.62x54_ap", "ammo_7.62x54_7h14",
+	"ammo_12x70_buck", "ammo_12x76_zhekan", "ammo_5.45x39_fmj", "ammo_5.45x39_ap",
+	"ammo_5.56x45_ss190", "ammo_5.56x45_ap", "ammo_7.62x54_7h1",
 	"ammo_9x39_pab9", "ammo_9x39_ap", "ammo_pkm_100", "ammo_vog-25", "ammo_m209", "ammo_og-7b", "ammo_gauss",
 	"novice_outfit", "stalker_outfit", "scientific_outfit", "specops_outfit", "military_outfit", "dolg_outfit",
 	"dolg_heavy_outfit", "svoboda_light_outfit", "svoboda_heavy_outfit", "exo_outfit", "cs_heavy_outfit",
@@ -926,7 +930,7 @@ local ZONE_ITEMS = {
 	"af_medusa", "af_vyvert", "af_gravi", "af_gold_fish", "af_blood", "af_mincer_meat", "af_soul",
 	"af_electra_sparkler", "af_electra_flash", "af_electra_moonlight", "af_dummy_battery", "af_dummy_dummy",
 	"af_fireball", "af_cristall", "af_cristall_flower", "af_night_star", "af_eye", "af_fire", "af_glass", "af_ice",
-	"af_baloon", "af_compass", "af_fuzz_kolobok", "af_dummy_glassbeads", "af_dummy_pellicle",
+	"af_baloon", "af_compass", "af_fuzz_kolobok", "af_dummy_glassbeads",
 	"bread", "kolbasa", "conserva", "vodka", "energy_drink", "medkit", "medkit_army", "medkit_scientic", "bandage",
 	"antirad", "drug_booster", "drug_coagulant", "drug_psy_blockade", "drug_antidot", "drug_radioprotector",
 	"drug_anabiotic", "detector_simple", "detector_advanced", "detector_elite", "detector_scientific",
