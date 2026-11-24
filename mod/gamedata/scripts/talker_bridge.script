@@ -1249,13 +1249,13 @@ VOVA_GUN, VOVA_BELT, VOVA_RANGE = "wpn_vova_vist", 5000, 60
 VOVA_DROP = 100
 local vova_guns = {}  -- id of each Vova's gun -> true, to cut its belt when he's gone
 local VOVA_KEEP = { wpn_knife = true, wpn_binoc = true }  -- the rest of his own guns and grenades go
-local vovas = {}  -- id -> true while he lives
+local vovas = {}  -- id -> true while he lives ("angry": the player shot him, so he's the player's enemy for good)
 local vovas_loaded, next_vova_check = false, 0
 local VOVA_KEY = "talker_vova"
 
 local function vova_save()
 	local ids = {}
-	for id in pairs(vovas) do table.insert(ids, tostring(id)) end
+	for id, v in pairs(vovas) do table.insert(ids, id .. (v == "angry" and "!" or "")) end
 	pcall(function() return xr_logic.pstor_store(db.actor, VOVA_KEY, table.concat(ids, ",")) end)
 end
 
@@ -1263,7 +1263,7 @@ local function vova_load()
 	vovas_loaded = true
 	local ok, s = pcall(function() return xr_logic.pstor_retrieve(db.actor, VOVA_KEY, "") end)
 	if not ok or type(s) ~= "string" then return end
-	for id in string.gmatch(s, "%d+") do vovas[tonumber(id)] = true end
+	for id, angry in string.gmatch(s, "(%d+)(!?)") do vovas[tonumber(id)] = angry == "!" and "angry" or true end
 end
 
 -- Once he's in the game: only the machine gun is left to him (so it's the one he fights with), and he's neutral to you.
@@ -1307,7 +1307,11 @@ local function update_vova(id, obj)
 		gun:set_ammo_elapsed(VOVA_BELT)
 		vova_guns[gun:id()] = true
 	end
-	if obj:relation(db.actor) == game_object.enemy then make_neutral(obj) end  -- you shot him: still not your enemy
+	if vovas[id] == "angry" then  -- the player shot him: his enemy from now on
+		if obj:relation(db.actor) ~= game_object.enemy then add_grudge(obj, db.actor) end
+	elseif obj:relation(db.actor) == game_object.enemy then
+		make_neutral(obj)  -- dragged into a fight by someone else: still not your enemy until you shoot him
+	end
 	local pos = obj:position()
 	for oid in pairs(db.storage) do
 		local o = oid ~= id and not vovas[oid] and level.object_by_id(oid)
@@ -1952,6 +1956,13 @@ function update(delta)
 	end
 	if not props_loaded then props_load() end
 	if not vovas_loaded then vova_load() end
+	do  -- «Свистілка Вови Віста» in the player's hands: endless ammo, topped up every frame (a light belt, never empty)
+		local held = db.actor:active_item()
+		if held and held:section() == VOVA_GUN then
+			local okg, n = pcall(function() return held:get_ammo_in_magazine() end)
+			if okg and n and n < VOVA_DROP then pcall(function() held:set_ammo_elapsed(VOVA_DROP) end) end
+		end
+	end
 	if next(vovas) and now >= next_vova_check then
 		next_vova_check = now + 1000
 		local okv, errv = pcall(update_vovas)
@@ -2013,6 +2024,11 @@ function on_npc_hit(npc, amount, who)
 	if who:id() ~= db.actor:id() then
 		pcall(on_feud_hit, npc, who)
 		return
+	end
+	if vovas[npc:id()] and vovas[npc:id()] ~= "angry" then  -- Вова Віст: shoot him and he turns on you
+		vovas[npc:id()] = "angry"
+		pcall(add_grudge, npc, db.actor)
+		vova_save()
 	end
 	local now = time_global()
 	if (hit_cooldown[npc:id()] or 0) > now then return end

@@ -38,7 +38,7 @@ REDEEMS = [
     Redeem("giant", "TWITCH_GIANT_REWARD", "Хуй будеш?",
            "A hostile pseudogiant turns up 15-30 m away and comes for you.", "on_giant"),
     Redeem("vova", "TWITCH_VOVA_REWARD", "Вова Віст",
-           "A soldier with a whistling machine gun shoots at everyone but you.", "on_vova"),
+           "A soldier with a whistling machine gun shoots at everyone but you, until you shoot him.", "on_vova"),
     Redeem("anekdot", "TWITCH_ANEKDOT_REWARD", "Анекдот",
            "Bread, a sausage and bolts roll on the ground; nobody can pick them up.", "on_anekdot"),
     Redeem("gosha", "TWITCH_GOSHA_REWARD", "Гоша",
