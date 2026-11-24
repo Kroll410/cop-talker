@@ -230,6 +230,34 @@ events()
 take("news")
 check(len(c) == 10, f"child: at most 10 ({len(c)})")
 
+# «Хуй будеш?»: one pseudogiant (whichever the game has), 15-30 m away, at once; in the game it's your enemy and
+# provoked, like a «child» mutant (zone_pending what = "child")
+inbox("zone||giant|Хуй будеш?|viewer питає: «Хуй будеш?» Псевдогігант уже скаче з відповіддю")
+step(300)
+c, n, ev = take("created"), take("news"), events()
+check(len(c) == 1 and c[0]["sec"] == "gigant_strong" and c[0]["parent"] is None,
+      f"giant: one pseudogiant, of a section the game has {[x['sec'] for x in c]}")
+check(c and 15 <= c[0]["d"] <= 30, f"giant: 15-30 m away {[x['d'] for x in c]}")
+check(n and n[0].startswith("Хуй будеш?|viewer питає"), f"giant: PDA line {n}")
+check(ev and ev[0]["ok"] and ev[0]["what"] == "giant" and ev[0]["count"] == 1 and c and ev[0]["id"] == c[0]["id"],
+      f"giant: zone_done {ev}")
+if c:
+    g = c[0]["id"]
+    L.execute(f"o = make({g}, 'псевдогігант', 20); o._rel = 1; db.storage[{g}] = {{ object = o }}")
+    step(300)
+    step(1200)
+    h = take("hits")
+    check(h == [f"{g}:0"] and L.eval(f"objs[{g}]._rel") == L.eval("game_object.enemy"),
+          f"giant: in the game it's the player's enemy and goes for him (pending as child) {h}")
+    L.execute(f"db.storage[{g}] = nil")
+L.execute("HAVE.gigant_strong = false")
+inbox("zone||giant|c|t")
+step(300)
+ev = events()
+check(not take("created") and not take("news") and ev and not ev[0]["ok"] and ev[0]["reason"] == "no mutant",
+      f"giant: none in the game, nothing made {ev}")
+L.execute("HAVE.gigant_strong = true")
+
 # nonsense: reported, nothing made
 inbox("zone||boom|c|t")
 step(300)
@@ -378,4 +406,246 @@ inbox("zone||suslov|c|t")
 step(300)
 ev = events()
 check(not take("created") and ev and not ev[0]["ok"] and ev[0]["reason"] == "no item", f"no sausage in the game: nothing spawned {ev}")
+
+# «Анекдот»: a bread and a sausage side by side ahead of the player, ANEKDOT_BOLTS bolts scattered all round them.
+# Loose props: never pinned (they roll), their spot follows them, picked up they go back where they last lay; the
+# saved format stays the old one for pinned props (old saves read the same)
+L.execute("""HAVE.kolbasa = true; HAVE.bread = true; HAVE.bolt = true; drops = {}
+level.vertex_id = function(p) return 5000 end
+function db.actor:direction() return vector():set(0, 0, 1) end""")
+take("created"); events(); take("news")
+inbox("zone||anekdot|Анекдот|viewer розповідає анекдот")
+step(300)
+c, n, ev = take("created"), take("news"), events()
+nbolts = L.eval("ANEKDOT_BOLTS")
+ahead, side, (lo, hi) = L.eval("ANEKDOT_AHEAD"), L.eval("ANEKDOT_SIDE"), list(L.eval("ANEKDOT_SPREAD").values())
+bread = [x for x in c if x["sec"] == "bread"]
+sausage = [x for x in c if x["sec"] == "kolbasa"]
+bolts = [x for x in c if x["sec"] == "bolt"]
+check(10 <= nbolts <= 15 and len(bread) == 1 and len(sausage) == 1 and len(bolts) == nbolts and len(c) == nbolts + 2,
+      f"anekdot: a bread, a sausage and {nbolts} bolts {[x['sec'] for x in c]}")
+if bread and sausage:
+    b, s = bread[0], sausage[0]
+    check(abs(b["z"] - ahead) < 1e-6 and abs(s["z"] - ahead) < 1e-6 and abs(b["x"] + s["x"]) < 1e-6
+          and abs(s["x"] - b["x"] - 2 * side) < 1e-6, f"bread and sausage side by side ahead (x {b['x']:.2f}, {s['x']:.2f})")
+import math
+dist = [math.hypot(x["x"], x["z"] - ahead) for x in bolts]
+check(dist and all(lo - 1e-6 <= d <= hi + 1e-6 for d in dist), f"every bolt {lo}-{hi} m from them {[round(d, 2) for d in dist]}")
+slices = {int((math.atan2(x["x"], x["z"] - ahead) % (2 * math.pi)) / (2 * math.pi) * nbolts) for x in bolts}
+check(len(slices) == nbolts, f"scattered all round, one per slice of the circle {sorted(slices)}")
+check(all(x["z"] > 0.5 for x in bolts), "none under the player's feet or behind him")
+check(all(abs(x["y"] - 0.1) < 1e-6 and x["parent"] is None for x in c), "all on the ground (just above it), none in a backpack")
+check(ev and ev[0]["ok"] and ev[0]["what"] == "anekdot" and any(x.startswith("Анекдот|") for x in n), f"done, PDA line {ev} {n}")
+saved = {p.split(":")[0]: p for p in (L.eval("pstor.talker_props") or "").split(";") if p}
+check(all(saved.get(str(x["id"]), "").endswith(":0:0:1") for x in c), "kept in the save, marked loose, not pinned")
+check(all(p.count(":") == 5 for p in saved.values() if int(p.split(":")[0]) not in [x["id"] for x in c]),
+      "the «Шари Суслова» props are saved just as before (old format)")
+L.execute("""function loose(id, x, y, z)
+  local o = prop(id, x, false)
+  o._y, o._z = y, z
+  function o:position() return vector():set(self._x, self._y, self._z) end
+  return o
+end
+function npc_drop(self, o, p) table.insert(drops, self:id() .. '>' .. o:id() .. string.format('@%.2f,%.2f,%.2f', p.x, p.y, p.z)); o._parent = nil end
+db.actor.drop_item_and_teleport = npc_drop""")
+for x in c:
+    L.execute(f"loose({x['id']}, {x['x']}, {x['y']}, {x['z']})")
+fixed = lambda i: L.eval(f"next(objs[{i}]._fixed) ~= nil")
+step(1100); step(1100); step(1100)
+check(not any(fixed(x["id"]) for x in c), "settled long ago: still none pinned, they roll and can be kicked")
+bid, kid = bread[0]["id"], bolts[0]["id"]
+L.execute(f"objs[{bid}]._x, objs[{bid}]._y, objs[{bid}]._z = 0.7, 0.05, 2.5")  # kicked away
+step(1100)
+saved_bread = ([p for p in L.eval("pstor.talker_props").split(";") if p.startswith(f"{bid}:")] or [""])[0]
+check(saved_bread == f"{bid}:0.700:0.050:2.500:0:0:1", f"kicked: its new spot is remembered (and saved) {saved_bread}")
+L.execute(f"objs[{bid}]._parent = db.actor; on_item_take(objs[{bid}])")
+check(not [e for e in events() if e.get("type") == "artifact"], "picking it up isn't reported as a found artifact")
+step(100)
+d = take("drops")
+check(d == [f"0>{bid}@0.70,0.05,2.50"], f"the player picked it up: put back where it last lay, not where it fell {d}")
+L.execute(f"""thief = make(60, "Сталкер", 3); thief.drop_item_and_teleport = npc_drop
+objs[{kid}]._parent = thief""")  # an NPC takes a bolt (no on_item_take for him): found on the next check
+step(1100)
+d = take("drops")
+bx, bz = bolts[0]["x"], bolts[0]["z"]
+check(d == [f"60>{kid}@{bx:.2f},0.10,{bz:.2f}"], f"an NPC picked up a bolt: dropped back at its spot {d}")
+L.execute(f"objs[{kid}]._x, objs[{kid}]._z = 0, 0")  # the engine put it somewhere else after the drop
+step(1100)
+check(not take("drops") and not fixed(kid) and not fixed(bid), "back on the ground: left alone, still not pinned")
+# a save from before «Анекдот» (only pinned props, the old 6 fields) and one with a loose prop read back right
+L.execute(f"""pstor.talker_props = "777:1.000:2.000:3.000:1:1;778:4.000:0.100:5.000:0:0:1"
+prop(777, 1, true); loose(778, 4, 0.1, 5); on_actor_spawn()""")
+step(1100)
+check(fixed(777) and not fixed(778), "an old save's prop is pinned again; a loose one isn't")
+L.execute("objs[778]._parent = db.actor")
+step(1100)
+check(take("drops") == ["0>778@4.00,0.10,5.00"], "a loose prop read from the save: picked up, back at its spot")
+s = L.eval("pstor.talker_props") or ""
+check("777:1.000:2.000:3.000:1:1;" in s + ";" and "778:4.000:0.100:5.000:0:0:1" in s, f"written back the same way {s}")
+L.execute("objs[777] = nil; objs[778] = nil")
+for x in c:
+    L.execute(f"objs[{x['id']}] = nil")
+step(1100)
+left = {int(p.split(":")[0]) for p in (L.eval("pstor.talker_props") or "").split(";") if p}
+check(not left & ({777, 778} | {x["id"] for x in c}), f"props gone from the game are forgotten {left}")
+L.execute("HAVE.bolt = false")
+events()
+inbox("zone||anekdot|c|t")
+step(300)
+ev = events()
+check(not take("created") and ev and not ev[0]["ok"] and ev[0]["reason"] == "no item", f"no bolts in the game: nothing spawned {ev}")
+L.execute("HAVE.bolt = true; HAVE.kolbasa = false")
+
+# «Вова Віст»: a soldier named after the caption, the whistling machine gun in his hands, his own guns taken away,
+# neutral to the player (also after the player shoots him), at war with every man and mutant within VOVA_RANGE
+L.execute("""
+SE, names, released, refills = {}, {}, {}, {}
+local base_alife = alife
+function alife()
+  local a = base_alife()
+  local create = a.create
+  a.create = function(self, sec, pos, lv, gv, parent)
+    local se = create(self, sec, pos, lv, gv, parent)
+    function se:set_character_name(n) names[self.id] = n end
+    SE[se.id] = se
+    return se
+  end
+  a.object = function(_, id)
+    if SE[id] or objs[id] then return SE[id] or { id = id, force_set_goodwill = function() end } end
+    return nil
+  end
+  a.release = function(_, se) table.insert(released, se.id); SE[se.id] = nil end
+  return a
+end
+function IsMonster(o) return o and o._monster == true end
+function soldier(id, x, inv)
+  local o = make(id, "Вова Віст", x)
+  o._rels, o._inv = {}, inv
+  function o:set_relation(r, who) self._rels[who:id()] = r end
+  function o:relation(who) return self._rels[who:id()] or game_object.neutral end
+  function o:iterate_inventory(fn, owner) for _, it in ipairs(self._inv) do fn(owner, it) end end
+  function o:object(sec) for _, it in ipairs(self._inv) do if it:section() == sec and SE[it:id()] then return it end end end
+  db.storage[id] = { object = o }
+  return o
+end
+function item(id, sec)
+  SE[id] = SE[id] or { id = id }
+  return { id = function() return id end, section = function() return sec end,
+    set_ammo_elapsed = function(_, n) table.insert(refills, id .. ':' .. n) end }
+end
+""")
+take("created"); events(); take("news")
+inbox("zone||vova|Вова Віст|viewer кличе Вову Віста")
+step(300)
+ev = events()
+check(not take("created") and ev and not ev[0]["ok"] and "wpn_vova_vist" in ev[0]["reason"],
+      f"the gun isn't in the game (install_mod.ps1 not run): nobody spawned, a clear reason {ev}")
+L.execute("HAVE.wpn_vova_vist = true; HAVE.sim_default_military_2 = true")
+take("news")
+inbox("zone||vova|Вова Віст|viewer кличе Вову Віста")
+step(300)
+c, n, ev = take("created"), take("news"), events()
+man = [x for x in c if x["sec"].startswith("sim_default_military_")]
+gun = [x for x in c if x["sec"] == "wpn_vova_vist"]
+check(len(c) == 2 and len(man) == 1 and len(gun) == 1, f"vova: one soldier (військовий) and the gun {[x['sec'] for x in c]}")
+vid = man[0]["id"] if man else -1
+check(man and 8 <= man[0]["d"] <= 15 and man[0]["parent"] is None, f"he stands near the player {man}")
+check(gun and gun[0]["parent"] == vid, f"the gun is made in his hands {gun}")
+check(L.eval(f"names[{vid}]") == "Вова Віст", "his name in the game is the caption, set before he comes online")
+check(ev and ev[0]["ok"] and ev[0]["what"] == "vova" and ev[0]["name"] == "Вова Віст" and ev[0]["id"] == vid,
+      f"done {ev}")
+check(any(x.startswith("Вова Віст|") for x in n), f"a PDA line under his name {n}")
+check(L.eval("pstor.talker_vova") == str(vid), "kept in the save")
+gid = gun[0]["id"] if gun else -1
+L.execute(f"""V = soldier({vid}, 10, {{ item(900, 'wpn_ak74'), item(901, 'wpn_knife'), item(902, 'grenade_f1'),
+  item({gid}, 'wpn_vova_vist'), item(903, 'bread'), item(904, 'wpn_binoc') }})
+V._rels[0] = game_object.enemy""")  # the army hates the player here
+step(300)
+step(1100)
+check(sorted(take("released")) == [900, 902], "his own rifle and grenade are taken away; knife, binoculars, bread and the whistle stay")
+check(L.eval("V:relation(db.actor)") == L.eval("game_object.neutral"), "neutral to the player")
+L.execute("""near = make(50, "Сусід", 20); beast = make(51, "Плоть", 35); beast._monster = true
+far = make(52, "Далекий", 200); dead = make(53, "Мрець", 15); dead._alive = false
+for _, o in ipairs({ near, beast, far, dead }) do db.storage[o:id()] = { object = o } end
+take_refills = function() local r = refills; refills = {}; return r end""")
+step(1100)
+fights = L.eval("function(a, b) return is_contract(objs[a], objs[b]) end")
+check(fights(vid, 50) and fights(vid, 51), "he opens fire on a man and a mutant nearby")
+check(not fights(vid, 52) and not fights(vid, 53) and not fights(vid, 0), "not on one far away, a dead one, or the player")
+check(L.eval("V._rels[50]") == L.eval("game_object.enemy"), "the man nearby is his enemy now")
+check(L.eval("V:relation(db.actor)") == L.eval("game_object.neutral"), "and the player still isn't")
+check(f"{gid}:5000" in list(L.eval("take_refills()").values()), "his belt is filled back to 5000: he never reloads")
+L.execute("V._rels[0] = game_object.enemy")  # the player shot him
+step(1100)
+check(L.eval("V:relation(db.actor)") == L.eval("game_object.neutral"), "shot by the player: neutral again")
+L.execute("on_actor_spawn(); take_refills()")
+step(1100)
+check(f"{gid}:5000" in list(L.eval("take_refills()").values()), "after a reload: still kept full (read back from the save)")
+L.execute("V._alive = false")
+step(1100)
+check((L.eval("pstor.talker_vova") or "") == "", "dead: forgotten")
+L.execute("V._alive = true; HAVE.sim_default_military_2 = false")
+inbox("zone||vova|Вова Віст|t")
+step(300)
+ev = [e for e in events() if e.get("type") == "zone_done"]
+check(not take("created") and ev and not ev[0]["ok"] and ev[0]["reason"] == "no soldier", f"no soldier section: nothing spawned {ev}")
+
+# «62»: the streamer's clip SIXTY_TWO_COUNT times at once, no autosave, each copy 3D at its own spot around the player
+# (one per slice of the circle, NEAR-FAR m), its own volume, pitch and delay; kept referenced until done, then let go
+L.execute("""played, SOUNDS = {}, { ["talker\\\\sixty_two.ogg"] = true, ["talker\\\\sixty_two_slow.ogg"] = true,
+  ["talker\\\\sixty_two_fast.ogg"] = true }
+function getFS() return { update_path = function() return ROOT .. "talker/" end,
+  exist = function(_, root, name) return root == "$game_sounds$" and SOUNDS[name] or nil end } end
+sound_object = setmetatable({ s3d = 0, looped = 1, s2d = 2 }, { __call = function(_, name)
+  local s = { name = name }
+  function s:play_at_pos(obj, pos, delay, flags)
+    self.volume, self.frequency = 1, 1  -- the engine resets these on play
+    table.insert(played, { s = self, obj = obj and obj:id(), x = pos.x, y = pos.y, z = pos.z, delay = delay, flags = flags })
+  end
+  return s end })
+TUTORIAL = false""")
+step(11000)
+take("saves"); take("created"); take("news"); events()
+inbox("zone||62|62|viewer передає: шиісят два! Звідусіль")
+step(300)
+n, ev, saves = take("news"), events(), take("saves")
+p = [dict(x) for x in L.eval("played").values()]
+for x in p:
+    s = x.pop("s")
+    x.update(name=s.name, volume=s.volume, pitch=s.frequency, lo=s.min_distance, hi=s.max_distance)
+count, near, far = L.eval("SIXTY_TWO_COUNT"), L.eval("SIXTY_TWO_NEAR"), L.eval("SIXTY_TWO_FAR")
+(vlo, vhi), (plo, phi), (dlo, dhi) = (list(L.eval(k).values()) for k in ("SIXTY_TWO_VOLUME", "SIXTY_TWO_PITCH", "SIXTY_TWO_DELAY"))
+check(count == 10 and len(p) == 10, f"62: 10 copies played at once ({len(p)})")
+check(all(x["flags"] == 0 and x["obj"] == 0 for x in p), "62: 3D (s3d), from the player's side")
+kinds = Counter(x["name"] for x in p)
+check(set(kinds) == {"talker\\sixty_two", "talker\\sixty_two_slow", "talker\\sixty_two_fast"}
+      and max(kinds.values()) - min(kinds.values()) <= 1, f"62: as recorded, slowed down and sped up, shared out evenly {dict(kinds)}")
+check(not saves and ev and ev[0].get("autosave") == "not needed", f"62: no autosave first, played straight away {saves} {ev}")
+vols, pitches, delays = [x["volume"] for x in p], [x["pitch"] for x in p], [x["delay"] for x in p]
+check(len(set(vols)) == 10 and all(vlo <= v <= vhi for v in vols), f"62: each its own volume {[round(v, 2) for v in vols]}")
+check(len(set(pitches)) == 10 and all(plo <= v <= phi for v in pitches) and min(pitches) < 1 < max(pitches),
+      f"62: each its own pitch, low to high {[round(v, 2) for v in pitches]}")
+check(len(set(delays)) == 10 and all(dlo <= v <= dhi for v in delays) and max(delays) - min(delays) > 1,
+      f"62: each its own start delay (seconds) {[round(v, 2) for v in delays]}")
+check(all(x["lo"] == 5 and x["hi"] == 60 for x in p), "62: hearing range set after play (play resets it)")
+dist = [math.hypot(x["x"], x["z"]) for x in p]
+check(all(near - 1e-6 <= d <= far + 1e-6 for d in dist), f"62: {near}-{far} m from the player {[round(d, 1) for d in dist]}")
+slices = {int((math.atan2(x["z"], x["x"]) % (2 * math.pi)) / (2 * math.pi) * 10) for x in p}
+check(len(slices) == 10 and len({(round(x["x"], 3), round(x["z"], 3)) for x in p}) == 10,
+      f"62: all round the player, one per slice of the circle {sorted(slices)}")
+check(all(x["y"] > 0 for x in p), "62: above the ground")
+check(ev and ev[0]["ok"] and ev[0]["what"] == "62" and ev[0]["count"] == 10, f"62: zone_done {ev}")
+check(n and n[0].startswith("62|viewer передає"), f"62: PDA line {n}")
+check(not take("created"), "62: nothing spawned")
+check(L.eval("#sixty_two_sounds") == 10, "62: all 10 kept referenced while they play (no GC cut-off)")
+longest = max(v[2] for v in L.eval("SIXTY_TWO_SOUNDS").values())
+step(int((dhi + longest / plo) * 1000) + 2500)
+check(L.eval("#sixty_two_sounds") == 0, "62: let go once they've all finished")
+L.execute('SOUNDS["talker\\\\sixty_two_fast.ogg"] = nil; played = {}')
+inbox("zone||62|62|t")
+step(300)
+ev = events()
+check(not list(L.eval("played").values()) and ev and not ev[0]["ok"] and "install_mod" in ev[0]["reason"],
+      f"62: the clip isn't installed: nothing played, a clear reason {ev}")
+take("news")
 print("OK" if ok else "FAIL")

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="windows-1251" ?>
+<!-- StalkerTalker: names of its own items (configs	alker_items.ltx). -->
+<string_table>
+	<string id="st_wpn_vova_vist">
+		<text>Свистілка Вови Віста</text>
+	</string>
+	<string id="st_wpn_vova_vist_descr">
+		<text>Кулемет Вови Віста. Стріляє в сто разів швидше за звичайний ПК, а шкоди від нього — як від свистка.</text>
+	</string>
+</string_table>

@@ -1,0 +1,16 @@
+; StalkerTalker's own item sections. install_mod.ps1 makes configs\external.ltx include this file
+; (one line: #include "talker_items.ltx"); uninstall_mod.ps1 takes that line out again.
+; Names and descriptions: configs	ext\<language>	alker_items.xml (the game reads every file there).
+
+; Vova Vist's machine gun (Twitch reward): a PKM that fires 100x as fast and does 1000x less damage.
+; 5000 rounds a belt; while he lives, talker_bridge.script keeps it full, so he never reloads.
+[wpn_vova_vist]:wpn_pkm
+description             = st_wpn_vova_vist_descr
+inv_name                = st_wpn_vova_vist
+inv_name_short          = st_wpn_vova_vist
+rpm                     = 52500                         ; wpn_pkm: 525
+hit_power               = 0.0005, 0.0005, 0.0005, 0.0005  ; wpn_pkm: 0.5 each
+silencer_hit_power      = 0.00055, 0.00055, 0.00055, 0.00055
+ammo_mag_size           = 5000
+ammo_elapsed            = 5000
+cost                    = 500                           ; a toy, not a 20000 loot prize

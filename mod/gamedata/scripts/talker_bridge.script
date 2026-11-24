@@ -5,7 +5,7 @@
 --   inbox.txt    - written by the companion: "say|<npc_id>|<text>" lines; read and deleted here
 -- Every entry point is called through pcall from the hooks, so a bug here never crashes the game.
 
-MOD_VERSION = 14  -- the companion app checks this, so a game still running an old copy of this script is noticed
+MOD_VERSION = 15  -- the companion app checks this, so a game still running an old copy of this script is noticed
 local dir = nil
 local next_state_write = 0
 local next_inbox_check = 0
@@ -1052,36 +1052,111 @@ end
 -- the sausage's middle further ahead by SUSLOV_SHAFT, right between them.
 SUSLOV_AHEAD, SUSLOV_SHAFT, SUSLOV_BALLS = 1.6, 0.28, { 0.12, -0.12 }
 
+-- «Хуй будеш?» (Twitch reward): one pseudogiant (any of these the game has), this many metres from the player.
+GIANT_SECTIONS, GIANT_NEAR, GIANT_FAR = { "gigant_normal", "gigant_strong", "gigant_big_strong" }, 15, 30
+
+-- «Анекдот» layout, in metres: the bread and the sausage side by side this far ahead of the player (ANEKDOT_SIDE to
+-- each side), ANEKDOT_BOLTS bolts scattered all round that spot, ANEKDOT_SPREAD[1] to [2] metres from it.
+ANEKDOT_AHEAD, ANEKDOT_SIDE, ANEKDOT_BOLTS, ANEKDOT_SPREAD = 1.8, 0.15, 12, { 0.4, 1.0 }
+
+-- «62» (Twitch reward): the streamer's clip (gamedata\sounds\talker\sixty_two*.ogg, mono for 3D) played SIXTY_TWO_COUNT
+-- times at once, every copy from its own spot around the player (in its own slice of the circle, SIXTY_TWO_NEAR to
+-- _FAR metres away, SIXTY_TWO_HEIGHT[1] to [2] metres up), at its own volume (SIXTY_TWO_VOLUME, 1 = full), pitch
+-- (SIXTY_TWO_PITCH: 1 = as recorded; the engine plays a lower one deeper and slower too) and start delay
+-- (SIXTY_TWO_DELAY, seconds), so they overlap and echo all round. Each copy is heard at full volume within
+-- SIXTY_TWO_RANGE[1] metres, fading out by [2]. SIXTY_TWO_SOUNDS: the clip as recorded, slowed down (x0.65) and sped
+-- up (x1.6) at the same pitch, with each one's length in seconds; the copies are shared out among them, mixed up.
+SIXTY_TWO_SOUNDS = { { "talker\\sixty_two", 3.09 }, { "talker\\sixty_two_slow", 4.75 }, { "talker\\sixty_two_fast", 1.93 } }
+SIXTY_TWO_COUNT = 10
+SIXTY_TWO_NEAR, SIXTY_TWO_FAR, SIXTY_TWO_HEIGHT = 3, 15, { 0.5, 3 }
+SIXTY_TWO_VOLUME, SIXTY_TWO_PITCH, SIXTY_TWO_DELAY = { 0.35, 1.0 }, { 0.7, 1.5 }, { 0, 2.5 }
+SIXTY_TWO_RANGE = { 5, 60 }
+ZONE_NO_SAVE = { ["62"] = true }  -- Zone events with no autosave first: only a sound, nothing worth saving for
+sixty_two_sounds = {}  -- copies not done yet: a sound_object Lua lets go of is stopped by the garbage collector
+
+local function shuffle(list)
+	for i = #list, 2, -1 do local j = math.random(i); list[i], list[j] = list[j], list[i] end
+	return list
+end
+
+-- n values from lo to hi, one in each of n equal slices (so no two are alike), in random order
+local function spread(n, lo, hi)
+	local list = {}
+	for i = 1, n do list[i] = lo + (i - 1 + math.random()) * (hi - lo) / n end
+	return shuffle(list)
+end
+
+-- «62»: starts every copy (each waits out its own delay in the engine). Returns how many, or nil and why not.
+local function sixty_two()
+	for _, v in ipairs(SIXTY_TWO_SOUNDS) do
+		local okf, file = pcall(function() return getFS():exist("$game_sounds$", v[1] .. ".ogg") end)
+		if okf and not file then return nil, "no sound " .. v[1] .. " (run install_mod.ps1)" end
+	end
+	local n = SIXTY_TWO_COUNT
+	local kinds = {}  -- which version each copy plays: all of them about equally often, in random order
+	for i = 1, n do kinds[i] = SIXTY_TWO_SOUNDS[(i - 1) % #SIXTY_TWO_SOUNDS + 1] end
+	shuffle(kinds)
+	local vols = spread(n, SIXTY_TWO_VOLUME[1], SIXTY_TWO_VOLUME[2])
+	local pitches = spread(n, SIXTY_TWO_PITCH[1], SIXTY_TWO_PITCH[2])
+	local delays = spread(n, SIXTY_TWO_DELAY[1], SIXTY_TWO_DELAY[2])
+	local apos, now = db.actor:position(), time_global()
+	for i = 1, n do
+		local a = (i - 1 + math.random()) * 2 * math.pi / n
+		local r = SIXTY_TWO_NEAR + math.random() * (SIXTY_TWO_FAR - SIXTY_TWO_NEAR)
+		local h = SIXTY_TWO_HEIGHT[1] + math.random() * (SIXTY_TWO_HEIGHT[2] - SIXTY_TWO_HEIGHT[1])
+		local snd = sound_object(kinds[i][1])
+		snd:play_at_pos(db.actor, vector():set(apos.x + r * math.cos(a), apos.y + h, apos.z + r * math.sin(a)),
+			delays[i], sound_object.s3d)
+		-- set after play: starting a sound resets its volume, pitch and range
+		snd.volume, snd.frequency = vols[i], pitches[i]
+		snd.min_distance, snd.max_distance = SIXTY_TWO_RANGE[1], SIXTY_TWO_RANGE[2]
+		table.insert(sixty_two_sounds, { snd = snd, till = now + (delays[i] + kinds[i][2] / pitches[i]) * 1000 + 2000 })
+	end
+	return n
+end
+
+local function update_sixty_two(now)  -- let go of the copies that have finished
+	for i = #sixty_two_sounds, 1, -1 do
+		if now > sixty_two_sounds[i].till then table.remove(sixty_two_sounds, i) end
+	end
+end
+
 -- What «Шари Суслова» lays out stays a prop: once it has settled on the ground its physics is pinned (it doesn't
 -- roll, slide or get kicked away), a fireball is always shown (the game hides an artifact on the ground after a few
 -- seconds from anyone without a detector), and whoever picks one up (the player or an NPC) has it put straight back
 -- where it lay. Kept with the save (the player's pstor), so it holds after a reload too.
-local props = {}  -- id -> { x, y, z, af = is an artifact, pinned = settled and pinned, seen = ms it came online }
+-- A loose prop («Анекдот») is never pinned: it rolls and can be kicked about. Each second its spot follows it while
+-- it lies on the ground, and whoever picks it up has it put back where it last lay.
+local props = {}  -- id -> { x, y, z, af = is an artifact, pinned = settled and pinned, loose, seen = ms it came online }
 local props_loaded, next_props_check = false, 0
 local PROPS_KEY, PROPS_SETTLE = "talker_props", 1500
 
 local function props_save()
 	local parts = {}
 	for id, p in pairs(props) do
-		table.insert(parts, string.format("%d:%.3f:%.3f:%.3f:%d:%d", id, p.x, p.y, p.z, p.af and 1 or 0, p.pinned and 1 or 0))
+		-- a loose prop adds ":1"; the rest are saved just as before it existed (old saves read the same)
+		table.insert(parts, string.format("%d:%.3f:%.3f:%.3f:%d:%d", id, p.x, p.y, p.z, p.af and 1 or 0, p.pinned and 1 or 0)
+			.. (p.loose and ":1" or ""))
 	end
-	pcall(xr_logic.pstor_store, db.actor, PROPS_KEY, table.concat(parts, ";"))
+	pcall(function() return xr_logic.pstor_store(db.actor, PROPS_KEY, table.concat(parts, ";")) end)
 end
 
 local function props_load()
 	props_loaded = true
-	local ok, s = pcall(xr_logic.pstor_retrieve, db.actor, PROPS_KEY, "")
+	local ok, s = pcall(function() return xr_logic.pstor_retrieve(db.actor, PROPS_KEY, "") end)
 	if not ok or type(s) ~= "string" then return end
 	for item in string.gmatch(s, "[^;]+") do
-		local id, x, y, z, af, pinned = string.match(item, "^(%d+):([-%d.]+):([-%d.]+):([-%d.]+):(%d):(%d)$")
+		local id, x, y, z, af, pinned, loose =
+			string.match(item, "^(%d+):([-%d.]+):([-%d.]+):([-%d.]+):(%d):(%d):?(%d?)$")
 		if id then
-			props[tonumber(id)] = { x = tonumber(x), y = tonumber(y), z = tonumber(z), af = af == "1", pinned = pinned == "1" }
+			props[tonumber(id)] = { x = tonumber(x), y = tonumber(y), z = tonumber(z), af = af == "1", pinned = pinned == "1",
+				loose = loose == "1" }
 		end
 	end
 end
 
-local function prop_add(se, p, af)
-	if se and se.id then props[se.id] = { x = p.x, y = p.y, z = p.z, af = af, pinned = false }; props_save() end
+local function prop_add(se, p, af, loose)
+	if se and se.id then props[se.id] = { x = p.x, y = p.y, z = p.z, af = af, pinned = false, loose = loose }; props_save() end
 end
 
 local function pin(obj)  -- every piece of its physics fixed where it is
@@ -1106,6 +1181,13 @@ local function update_prop(id, p, now)
 		p.seen = now
 		return false
 	end
+	if p.loose then  -- free to roll and be kicked: only its spot follows it, for when someone picks it up
+		local pos = obj:position()
+		local dx, dy, dz = pos.x - p.x, pos.y - p.y, pos.z - p.z
+		if dx * dx + dy * dy + dz * dz < 0.01 then return false end  -- still there (within 10 cm): nothing to save
+		p.x, p.y, p.z = pos.x, pos.y, pos.z
+		return true
+	end
 	if p.af then obj:get_artefact():SwitchVisibility(true) end  -- every second: never hides (it would after 5 s)
 	p.seen = p.seen or now
 	if not p.pinned and now - p.seen < PROPS_SETTLE then return false end  -- let it settle on the ground first
@@ -1126,6 +1208,160 @@ local function update_props()
 		elseif res then changed = true end
 	end
 	if changed then props_save() end
+end
+
+-- Spots on the ground in front of the player, for laying things out: at(ahead, side) is so many metres ahead of where
+-- he looks and so many to his side, on the ground there (just above it, so nothing sinks in), and its level vertex.
+local function ground_ahead(actor)
+	local d = actor:direction()
+	local fx, fz = d.x, d.z
+	local len = math.sqrt(fx * fx + fz * fz)
+	if len < 0.01 then fx, fz, len = 0, 1, 1 end
+	fx, fz = fx / len, fz / len   -- where he looks, flat on the ground
+	local rx, rz = fz, -fx        -- to his side
+	local apos = actor:position()
+	return function(ahead, side)
+		local p = vector():set(apos.x + fx * ahead + rx * side, apos.y, apos.z + fz * ahead + rz * side)
+		local lv = level.vertex_id(p)
+		if lv and lv < 4294967295 then p.y = level.vertex_position(lv).y else lv = actor:level_vertex_id() end
+		p.y = p.y + 0.1
+		return p, lv
+	end
+end
+
+-- «Вова Віст» (Twitch reward): a soldier (військовий) whose machine gun, wpn_vova_vist (configs\talker_items.ltx, added
+-- by install_mod.ps1), fires 100x as fast as a PKM and does 1000x less damage. He stays neutral to the player and is at
+-- war with every other man and mutant within VOVA_RANGE metres. His belt is kept full, so he never stops to reload.
+-- Kept with the save (the player's pstor), so it holds after a reload too.
+VOVA_GUN, VOVA_BELT, VOVA_RANGE = "wpn_vova_vist", 5000, 60
+local VOVA_KEEP = { wpn_knife = true, wpn_binoc = true }  -- the rest of his own guns and grenades go
+local vovas = {}  -- id -> true while he lives
+local vovas_loaded, next_vova_check = false, 0
+local VOVA_KEY = "talker_vova"
+
+local function vova_save()
+	local ids = {}
+	for id in pairs(vovas) do table.insert(ids, tostring(id)) end
+	pcall(function() return xr_logic.pstor_store(db.actor, VOVA_KEY, table.concat(ids, ",")) end)
+end
+
+local function vova_load()
+	vovas_loaded = true
+	local ok, s = pcall(function() return xr_logic.pstor_retrieve(db.actor, VOVA_KEY, "") end)
+	if not ok or type(s) ~= "string" then return end
+	for id in string.gmatch(s, "%d+") do vovas[tonumber(id)] = true end
+end
+
+-- Once he's in the game: only the machine gun is left to him (so it's the one he fights with), and he's neutral to you.
+local function vova_arm(obj)
+	local junk = {}
+	obj:iterate_inventory(function(_, item)
+		local sec = item:section()
+		if sec ~= VOVA_GUN and not VOVA_KEEP[sec] and (string.find(sec, "^wpn_") or string.find(sec, "^grenade_")) then
+			table.insert(junk, item:id())
+		end
+	end, obj)
+	for _, id in ipairs(junk) do
+		local se = alife():object(id)
+		if se then alife():release(se, true) end
+	end
+	make_neutral(obj)
+end
+
+local function update_vova(id, obj)
+	local gun = obj:object(VOVA_GUN)
+	if gun then gun:set_ammo_elapsed(VOVA_BELT) end  -- every second: at 875 shots a second the belt never runs dry
+	if obj:relation(db.actor) == game_object.enemy then make_neutral(obj) end  -- you shot him: still not your enemy
+	local pos = obj:position()
+	for oid in pairs(db.storage) do
+		local o = oid ~= id and not vovas[oid] and level.object_by_id(oid)
+		if o and o:alive() and (is_stalker(o) or IsMonster(o)) and o:position():distance_to(pos) < VOVA_RANGE
+				and not (grudges[id] and grudges[id][oid]) then
+			add_grudge(obj, o)  -- he opens up on everyone around (and whoever he hits fights back: on_feud_hit)
+		end
+	end
+	for other in pairs(vovas) do  -- two of them: they whistle at each other too
+		local o = other ~= id and level.object_by_id(other)
+		if o and o:alive() and o:position():distance_to(pos) < VOVA_RANGE and not (grudges[id] and grudges[id][other]) then
+			add_grudge(obj, o)
+		end
+	end
+end
+
+local function update_vovas()
+	local changed = false
+	for id in pairs(vovas) do
+		local obj = level.object_by_id(id)
+		if not obj then
+			if not alife():object(id) then vovas[id] = nil; changed = true end  -- gone for good (just offline: kept)
+		elseif not obj:alive() then
+			vovas[id] = nil; changed = true
+		elseif not zone_pending[id] then  -- armed (zone_pending: still coming into the game)
+			local ok, err = pcall(update_vova, id, obj)
+			if not ok then log_error("vova " .. tostring(id) .. ": " .. tostring(err)) end
+		end
+	end
+	if changed then vova_save() end
+end
+
+-- A named man of a faction with a stock gun (Twitch rewards such as «Гоша»):
+--   "npc:<tag>:<community>:<weapon>:<side>:<nick>|<his name>|<PDA text>"
+-- sim_default_<community>_<rank> 15-30 m away, named after the PDA caption (the game's own name for him, kept with
+-- the save), with <weapon> (a section the game has; empty = his own) and two packs of its first ammo. Once he's in
+-- the game every other gun and grenade of his goes, so that weapon is the one he fights with. side: enemy (comes
+-- for you), neutral, ally (follows you, stays of his own faction). <nick>: the viewer, on the label over his head.
+local NPC_KEEP = { wpn_knife = true, wpn_binoc = true }  -- never taken from him
+local zone_arming = {}  -- id -> { gun, till }: his own guns are taken for a few seconds (his gear comes late)
+
+-- Every gun and grenade he carries but this one (and the knife and binoculars) is gone.
+local function zone_strip(obj, gun)
+	local junk = {}
+	obj:iterate_inventory(function(_, item)
+		local sec = item:section()
+		if sec ~= gun and not NPC_KEEP[sec] and (string.find(sec, "^wpn_") or string.find(sec, "^grenade_")) then
+			table.insert(junk, item:id())
+		end
+	end, obj)
+	for _, id in ipairs(junk) do
+		local se = alife():object(id)
+		if se then alife():release(se, true) end
+	end
+	return #junk
+end
+
+-- The first ammo a weapon takes ("ammo_class = ammo_12x70_buck, ammo_12x76_zhekan, ..."), or nil.
+local function weapon_ammo(gun)
+	local ok, list = pcall(function() return system_ini():r_string(gun, "ammo_class") end)
+	local ammo = ok and list and string.match(list, "^%s*([^,%s]+)")
+	return ammo and section_ok(ammo) and ammo or nil
+end
+
+-- A man of that community (any rank the game has) min_d..max_d metres away, named, with that gun.
+-- Returns the server object and his section, or nil and why not.
+local function zone_named(community, name, gun, min_d, max_d, pending)
+	local people = {}
+	for rank = 0, 4 do table.insert(people, "sim_default_" .. community .. "_" .. rank) end
+	local sec = pick_existing(people)
+	if not sec then return nil, "no " .. community end
+	if gun ~= "" and not section_ok(gun) then return nil, "no " .. gun end
+	local pos, lv = zone_point(min_d, max_d)
+	if not pos then return nil, "no place" end
+	local gv = db.actor:game_vertex_id()
+	local se = alife():create(sec, pos, lv, gv)
+	if name and name ~= "" then
+		-- before he comes online (the next A-Life update), so the name goes with him into the game and the save.
+		-- rank() first: it picks his profile now, which would overwrite a name set before it.
+		local okn, err = pcall(function() se:rank(); se:set_character_name(name) end)
+		if not okn then log_error("npc name: " .. tostring(err)) end
+	end
+	if gun ~= "" then
+		alife():create(gun, pos, lv, gv, se.id)
+		local ammo = weapon_ammo(gun)
+		if ammo then for _ = 1, 2 do alife():create(ammo, pos, lv, gv, se.id) end end
+	end
+	pending.till = time_global() + 30000
+	zone_pending[se.id] = pending
+	return se, sec
 end
 
 local function zone_event(text, save)
@@ -1187,20 +1423,7 @@ local function zone_event(text, save)
 		if not pick_existing({ "af_fireball" }) or not pick_existing({ "kolbasa" }) then
 			done.reason = "no item"; return append_event(done)
 		end
-		local d = actor:direction()
-		local fx, fz = d.x, d.z
-		local len = math.sqrt(fx * fx + fz * fz)
-		if len < 0.01 then fx, fz, len = 0, 1, 1 end
-		fx, fz = fx / len, fz / len   -- where he looks, flat on the ground
-		local rx, rz = fz, -fx        -- to his side
-		local apos, gv = actor:position(), actor:game_vertex_id()
-		local function at(ahead, side)  -- a spot on the ground: so many metres ahead, so many to the side
-			local p = vector():set(apos.x + fx * ahead + rx * side, apos.y, apos.z + fz * ahead + rz * side)
-			local lv = level.vertex_id(p)
-			if lv and lv < 4294967295 then p.y = level.vertex_position(lv).y else lv = actor:level_vertex_id() end
-			p.y = p.y + 0.1  -- dropped just above the ground, so nothing sinks into it
-			return p, lv
-		end
+		local at, gv = ground_ahead(actor), actor:game_vertex_id()
 		for _, side in ipairs(SUSLOV_BALLS) do
 			local p, lv = at(SUSLOV_AHEAD, side)
 			prop_add(alife():create("af_fireball", p, lv, gv), p, true)
@@ -1209,6 +1432,75 @@ local function zone_event(text, save)
 		prop_add(alife():create("kolbasa", p, lv, gv), p, false)
 		say()
 		done.ok, done.section = true, "af_fireball x2, kolbasa"
+		return append_event(done)
+	end
+	if what == "anekdot" then  -- «Анекдот»: a «Хліб» and a «Ковбаса» side by side, bolts scattered all round them
+		local actor = db.actor
+		if not pick_existing({ "bread" }) or not pick_existing({ "kolbasa" }) or not pick_existing({ "bolt" }) then
+			done.reason = "no item"; return append_event(done)
+		end
+		local at, gv = ground_ahead(actor), actor:game_vertex_id()
+		local function drop(sec, ahead, side)  -- a loose prop: it rolls and gets kicked, but nobody keeps it
+			local p, lv = at(ahead, side)
+			prop_add(alife():create(sec, p, lv, gv), p, false, true)
+		end
+		drop("bread", ANEKDOT_AHEAD, -ANEKDOT_SIDE)
+		drop("kolbasa", ANEKDOT_AHEAD, ANEKDOT_SIDE)
+		local lo, hi = ANEKDOT_SPREAD[1], ANEKDOT_SPREAD[2]
+		for i = 1, ANEKDOT_BOLTS do  -- each bolt in its own slice of the circle, at a random angle and distance in it
+			local a = (i - 0.8 + math.random() * 0.6) * 2 * math.pi / ANEKDOT_BOLTS
+			local r = lo + math.random() * (hi - lo)
+			drop("bolt", ANEKDOT_AHEAD + r * math.cos(a), r * math.sin(a))
+		end
+		say()
+		done.ok, done.section = true, "bread, kolbasa, bolt x" .. ANEKDOT_BOLTS
+		return append_event(done)
+	end
+	if what == "vova" then  -- «Вова Віст»: a soldier named after the caption, with the whistling machine gun
+		if not section_ok(VOVA_GUN) then done.reason = "no " .. VOVA_GUN .. " (run install_mod.ps1)"; return append_event(done) end
+		local soldiers = {}
+		for rank = 0, 4 do table.insert(soldiers, "sim_default_military_" .. rank) end
+		local sec = pick_existing(soldiers)
+		local pos, lv = zone_point(8, 15)
+		if not sec or not pos then done.reason = sec and "no place" or "no soldier"; return append_event(done) end
+		local gv = db.actor:game_vertex_id()
+		local se = alife():create(sec, pos, lv, gv)
+		-- before he comes online (the next A-Life update), so the name goes with him into the game and the save
+		if caption and caption ~= "" then
+			local okn, err = pcall(function() se:set_character_name(caption) end)
+			if not okn then log_error("vova name: " .. tostring(err)) end
+		end
+		alife():create(VOVA_GUN, pos, lv, gv, se.id)  -- in his hands, belt full
+		zone_pending[se.id] = { what = "vova", till = time_global() + 30000 }
+		vovas[se.id] = true
+		vova_save()
+		say()
+		done.ok, done.section, done.id, done.name = true, sec, se.id, caption
+		return append_event(done)
+	end
+	local tag, community, gun, nside, nnick = string.match(what, "^npc:([%w_]+):([%w_]+):([%w_%.%-]*):(%a+):(.*)$")
+	if tag then  -- a named man of a faction with a stock gun («Гоша»), at once
+		local se, res = zone_named(community, caption, gun, 15, 30,
+			{ what = "npc", tag = tag, side = nside, nick = nnick, gun = gun, name = caption })
+		if not se then done.reason = res; return append_event(done) end
+		say()
+		done.ok, done.section, done.id, done.name, done.tag, done.weapon = true, res, se.id, caption, tag, gun
+		return append_event(done)
+	end
+	if what == "giant" then  -- «Хуй будеш?»: one pseudogiant close by, your enemy and provoked, like a Zone mutant
+		local sec = pick_existing(GIANT_SECTIONS)
+		local pos, lv = zone_point(GIANT_NEAR, GIANT_FAR)
+		if not sec or not pos then done.reason = sec and "no place" or "no mutant"; return append_event(done) end
+		say()
+		done.id = zone_spawn(sec, pos, lv, { what = "child" })
+		done.ok, done.section, done.count = true, sec, 1
+		return append_event(done)
+	end
+	if what == "62" then  -- «62»: the streamer's clip shouted 10 times from all round, overlapping (sixty_two)
+		local count, why = sixty_two()
+		if not count then done.reason = why; return append_event(done) end
+		say()
+		done.ok, done.section, done.count = true, "sixty_two", count
 		return append_event(done)
 	end
 	done.reason = "unknown"
@@ -1240,6 +1532,15 @@ local function update_zone()
 			end
 		end
 	end
+	for id, a in pairs(zone_arming) do  -- his own gear can come a moment after him: take it again for a few seconds
+		local obj = level.object_by_id(id)
+		if not obj or not obj:alive() or now > a.till then
+			zone_arming[id] = nil
+		else
+			local ok, err = pcall(zone_strip, obj, a.gun)
+			if not ok then zone_arming[id] = nil; log_error("npc strip: " .. tostring(err)) end
+		end
+	end
 	for id, p in pairs(zone_pending) do
 		local obj = level.object_by_id(id)
 		local st = db.storage[id]
@@ -1259,6 +1560,31 @@ local function update_zone()
 					end
 					if p.nick ~= "" then twitch_links[id] = p.nick; link_shown = false end
 					append_event({ type = "zone_spawned", id = id, nick = p.nick, side = p.side, npc = npc_info(obj) })
+				elseif p.what == "npc" then  -- a named man (zone_named): his gun, his side, the viewer's label
+					if p.gun ~= "" then
+						local oks, err = pcall(zone_strip, obj, p.gun)
+						if not oks then log_error("npc strip: " .. tostring(err)) end
+						zone_arming[id] = { gun = p.gun, till = now + 5000 }
+					end
+					if p.side == "ally" then
+						if grudges[id] then grudges[id][db.actor:id()] = nil end
+						pcall(function() obj:set_relation(game_object.friend, db.actor) end)
+						pcall(function() obj:force_set_goodwill(1000, db.actor) end)
+						local okf, err = pcall(start_follow, obj)
+						if not okf then log_error("npc follow: " .. tostring(err)) end
+					elseif p.side == "neutral" then
+						make_neutral(obj)
+					else
+						pcall(function() obj:set_relation(game_object.enemy, db.actor) end)
+						add_grudge(obj, db.actor)  -- he really comes for you, even near a base
+					end
+					if p.nick ~= "" then twitch_links[id] = p.nick; link_shown = false end
+					local info = npc_info(obj)
+					append_event({ type = "zone_spawned", id = id, nick = p.nick, side = p.side, tag = p.tag,
+						named = info.name == p.name, npc = info })
+				elseif p.what == "vova" then
+					local okv, err = pcall(vova_arm, obj)
+					if not okv then log_error("vova arm: " .. tostring(err)) end
 				else
 					pcall(function() obj:set_relation(game_object.enemy, db.actor) end)
 					local okp, err = pcall(zone_provoke, obj)
@@ -1298,7 +1624,7 @@ end
 -- A Zone line from the app: save first; the event itself goes off a moment later (in order, never before
 -- an event that is still waiting for its save).
 local function zone_line(text)
-	local save = zone_autosave()
+	local save = ZONE_NO_SAVE[string.match(text, "^[^|]*")] and "not needed" or zone_autosave()
 	if save == "saved" or next(zone_delayed) then
 		local last = zone_delayed[#zone_delayed]
 		local at = time_global() + (save == "saved" and 1500 or 0)
@@ -1582,11 +1908,18 @@ function update(delta)
 		local okd, errd = pcall(update_zone_delayed)
 		if not okd then log_error("zone delayed: " .. tostring(errd)) end
 	end
-	if next(zone_pending) or next(zone_friends) then
+	if next(zone_pending) or next(zone_friends) or next(zone_arming) then
 		local okz, errz = pcall(update_zone)
 		if not okz then log_error("zone: " .. tostring(errz)) end
 	end
 	if not props_loaded then props_load() end
+	if not vovas_loaded then vova_load() end
+	if next(vovas) and now >= next_vova_check then
+		next_vova_check = now + 1000
+		local okv, errv = pcall(update_vovas)
+		if not okv then log_error("vova: " .. tostring(errv)) end
+	end
+	if next(sixty_two_sounds) then update_sixty_two(now) end
 	if next(props) and now >= next_props_check then
 		next_props_check = now + 1000
 		local okp, errp = pcall(update_props)
@@ -1650,13 +1983,14 @@ function on_npc_use(npc, who)
 end
 
 function on_item_take(obj)
-	if obj and props[obj:id()] then next_props_check = 0; return end  -- a «Шари Суслова» prop: it goes back
+	if obj and props[obj:id()] then next_props_check = 0; return end  -- a «Шари Суслова» or «Анекдот» prop: it goes back
 	if not db.actor or not obj or not isArtefact(obj) then return end
 	append_event({ type = "artifact", name = item_title(obj:section()) or obj:section() })
 end
 
 function on_actor_spawn()
 	props, props_loaded = {}, false  -- read again from this save
+	vovas, vovas_loaded = {}, false
 	append_event({ type = "game_loaded" })
 end
 

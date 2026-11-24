@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="windows-1251" ?>
+<!-- StalkerTalker: names of its own items (configs	alker_items.ltx). -->
+<string_table>
+	<string id="st_wpn_vova_vist">
+		<text>Vova Vist's Whistle</text>
+	</string>
+	<string id="st_wpn_vova_vist_descr">
+		<text>Vova Vist's machine gun. It fires a hundred times faster than a normal PKM and hurts about as much as a whistle.</text>
+	</string>
+</string_table>

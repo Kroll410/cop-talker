@@ -126,13 +126,19 @@ NICE = {"STALKER_DIR": "Game folder", "SPEAK_MODE": "Speaking", "PTT_KEY": "Push
         "TWITCH_QUEUE_MAX": "Messages waiting, at most", "TWITCH_REWARD": "Speech reward title",
         "TWITCH_UNPREFIXED": "Messages without $ or %", "TWITCH_DISTANCE": "NPC distance",
         "TWITCH_SHOW_NAME": "Nick in the PDA", "TWITCH_LINKS": "Viewer keeps his NPC", "TWITCH_BLOCKED": "Blocked words",
-        "TWITCH_ZONE_REWARD": "Zone reward title", "TWITCH_SUSLOV_REWARD": "«Шари Суслова» reward", "TWITCH_ZONE_GAP": "Minutes between Zone events",
+        "TWITCH_ZONE_REWARD": "Zone reward title", "TWITCH_SUSLOV_REWARD": "«Шари Суслова» reward",
+        "TWITCH_GIANT_REWARD": "«Хуй будеш?» reward",
+        "TWITCH_VOVA_REWARD": "«Вова Віст» reward", "TWITCH_ANEKDOT_REWARD": "«Анекдот» reward",
+        "TWITCH_GOSHA_REWARD": "«Гоша» reward", "TWITCH_62_REWARD": "«62» reward",
+        "TWITCH_ZONE_GAP": "Minutes between Zone events",
         "TWITCH_ZONE_PACK_MAX": "Most mutants per event",
         "LLM_PROVIDER": "Replies by", "CLAUDE_MODEL": "Claude model", "CLAUDE_CLI": "Claude Code program",
         "GEMINI_MODEL": "Gemini model", "GEMINI_SMART_MODEL": "Gemini model for deals",
         "STT_MODELS": "Speech recognition"}
 # Reward titles: picked from the channel's own rewards (Refresh asks Twitch), or typed.
-REWARD_PICK = {"TWITCH_REWARD", "TWITCH_ZONE_REWARD", "TWITCH_SUSLOV_REWARD"}
+REWARD_PICK = {"TWITCH_REWARD", "TWITCH_ZONE_REWARD", "TWITCH_SUSLOV_REWARD", "TWITCH_VOVA_REWARD",
+               "TWITCH_ANEKDOT_REWARD", "TWITCH_GIANT_REWARD", "TWITCH_GOSHA_REWARD",
+               "TWITCH_62_REWARD"}
 WIDE = {"STALKER_DIR", "PLAYER_BIO", "NEWS_FEEDS", "CLAUDE_CLI", "TWITCH_BLOCKED", "STT_MODELS"}
 
 
@@ -438,7 +444,19 @@ class Window(QMainWindow):
                 ("Now: Дитя", "child", "Mutants come for you, right now."),
                 ("Now: random", "any", "One of the three, rolled like a real redemption, right now."),
                 ("Шари Суслова", "suslov", "Two «Вогняна куля» and a «Ковбаса» on the ground in front of you, "
-                                           "right now (Settings → TWITCH_SUSLOV_REWARD for the real reward).")):
+                                           "right now (Settings → TWITCH_SUSLOV_REWARD for the real reward)."),
+                ("Хуй будеш?", "giant", "One pseudogiant near you, hostile and coming for you, right now "
+                                        "(Settings → TWITCH_GIANT_REWARD for the real reward)."),
+                ("Вова Віст", "vova", "A soldier, «Вова Віст», with a machine gun that whistles (100x as fast, "
+                                     "1000x less damage) and shoots at everyone but you, right now "
+                                     "(Settings → TWITCH_VOVA_REWARD for the real reward)."),
+                ("Анекдот", "anekdot", "A «Хліб», a «Ковбаса» and a handful of bolts on the ground in front of you, "
+                                       "right now: they roll, but can't be picked up "
+                                       "(Settings → TWITCH_ANEKDOT_REWARD for the real reward)."),
+                ("Гоша", "gosha", "A Mercenary (найманець) named «Гоша» with a SPAS-12, 15-30 m away and coming "
+                                  "for you, right now (Settings → TWITCH_GOSHA_REWARD for the real reward)."),
+                ("62", "62", "«шиісят два» shouted 10 times from all round you, each from its own spot, at its own "
+                             "volume, pitch, speed and delay, right now (Settings → TWITCH_62_REWARD for the real reward).")):
             btn = QPushButton(text)
             btn.setToolTip(tip)
             btn.clicked.connect(lambda _=False, a=arg: self.send_zone(a))

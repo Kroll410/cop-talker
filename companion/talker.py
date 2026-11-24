@@ -251,6 +251,11 @@ TWITCH_BLOCKED = [w.strip().lower() for w in os.environ.get("TWITCH_BLOCKED", ""
 TWITCH_ZONE_REWARD = os.environ.get("TWITCH_ZONE_REWARD", "").strip()
 TWITCH_ZONE_PACK_MAX = int(os.environ.get("TWITCH_ZONE_PACK_MAX", "6") or 6)  # most mutants one event brings
 TWITCH_SUSLOV_REWARD = os.environ.get("TWITCH_SUSLOV_REWARD", "").strip()  # «Шари Суслова» reward title; empty = off
+TWITCH_GIANT_REWARD = os.environ.get("TWITCH_GIANT_REWARD", "").strip()  # «Хуй будеш?» reward title; empty = off
+TWITCH_VOVA_REWARD = os.environ.get("TWITCH_VOVA_REWARD", "").strip()  # «Вова Віст» reward title; empty = off
+TWITCH_ANEKDOT_REWARD = os.environ.get("TWITCH_ANEKDOT_REWARD", "").strip()  # «Анекдот» reward title; empty = off
+TWITCH_GOSHA_REWARD = os.environ.get("TWITCH_GOSHA_REWARD", "").strip()  # «Гоша» reward title; empty = off
+TWITCH_62_REWARD = os.environ.get("TWITCH_62_REWARD", "").strip()  # «62» reward title; empty = off
 TWITCH_ZONE_GAP = os.environ.get("TWITCH_ZONE_GAP", "5-7")  # minutes between two Zone events; 0 = at once
 
 LEVELS = {"zaton": "Затон", "jupiter": "Юпітер", "pripyat": "Прип'ять",
@@ -2907,7 +2912,13 @@ class Talker:
                                  on_code=lambda url, code: report("TWITCH_CODE", f"{url}|{code}"),
                                  source=TWITCH_SOURCE, channel=TWITCH_CHANNEL,
                                  zone_title=TWITCH_ZONE_REWARD, on_zone=self.on_zone,
-                                 triggers={TWITCH_SUSLOV_REWARD: self.on_suslov} if TWITCH_SUSLOV_REWARD else None)
+                                 triggers={title: fn for title, fn in ((TWITCH_SUSLOV_REWARD, self.on_suslov),
+                                                                       (TWITCH_GIANT_REWARD, self.on_giant),
+                                                                       (TWITCH_VOVA_REWARD, self.on_vova),
+                                                                       (TWITCH_ANEKDOT_REWARD, self.on_anekdot),
+                                                                       (TWITCH_GOSHA_REWARD, self.on_gosha),
+                                                                       (TWITCH_62_REWARD, self.on_sixty_two)) if title}
+                                 or None)
             self.twitch.start()
 
     def show_line(self, npc_id, text, pda_text=None):
@@ -3069,7 +3080,7 @@ class Talker:
             elif what == "ptt_up":
                 self.ptt_up.set()
 
-    MOD_VERSION = 14  # must match MOD_VERSION in talker_bridge.script
+    MOD_VERSION = 15  # must match MOD_VERSION in talker_bridge.script
 
     def check_mod_version(self, state):
         """The game reads its scripts only when a save loads: warn if it still runs an older copy."""
@@ -3836,6 +3847,86 @@ class Talker:
         self.zone_fired = {"kind": "suslov", "user": user}
         self.game.send("zone", None, f"suslov|Шари Суслова|{nick} шле привіт від Суслова. Під ногами, глянь")
 
+    GIANT_NAME = "Хуй будеш?"  # the reward's title, and the PDA caption
+
+    def on_giant(self, user, redemption=None):
+        """«Хуй будеш?»: one pseudogiant turns up near the player, at once (no queue, no waiting; the game still
+        autosaves first), hostile and provoked like the Zone's mutants. The men around panic about it."""
+        nick = zone.clean_nick(user)
+        state = self.game.state() or {}
+        if (state.get("mod_version") or 0) < 15 or (state.get("actor") or {}).get("health", 1) <= 0:
+            log(f"Twitch: {user} redeemed «{self.GIANT_NAME}», but the game isn't ready (not running, old script or dead)")
+            return
+        log(f"Twitch: {user} redeemed «{self.GIANT_NAME}»")
+        self.zone_fired = {"kind": "giant", "user": user, "monster": "псевдогігант"}
+        self.game.send("zone", None, f"giant|{self.GIANT_NAME}|{nick} питає: «Хуй будеш?» Псевдогігант уже скаче "
+                                     "з відповіддю. Тікай, сталкере, бо буде!")
+
+    VOVA_NAME = "Вова Віст"  # the PDA caption, and his name in the game
+
+    def on_vova(self, user, redemption=None):
+        """«Вова Віст»: a soldier (військовий) of that name turns up near the player, at once, with a machine gun that
+        fires 100x as fast and does 1000x less damage («Свистілка Вови Віста»). Neutral to the player, he opens fire
+        on everyone else around. Needs script version 15 and the gun's section (install_mod.ps1)."""
+        nick = zone.clean_nick(user)
+        state = self.game.state() or {}
+        if (state.get("mod_version") or 0) < 15 or (state.get("actor") or {}).get("health", 1) <= 0:
+            log(f"Twitch: {user} redeemed «{self.VOVA_NAME}», but the game isn't ready (not running, old script or dead)")
+            return
+        log(f"Twitch: {user} redeemed «{self.VOVA_NAME}»")
+        self.zone_fired = {"kind": "vova", "user": user}
+        self.game.send("zone", None, f"vova|{self.VOVA_NAME}|{nick} кличе Вову Віста. Зараз засвистить")
+
+    def on_anekdot(self, user, redemption=None):
+        """«Анекдот»: a «Хліб», a «Ковбаса» and a handful of bolts dropped on the ground in front of the player, at once
+        (no queue). They roll and can be kicked, but nobody can keep them: picked up, they go back. Needs script v15."""
+        nick = zone.clean_nick(user)
+        state = self.game.state() or {}
+        if (state.get("mod_version") or 0) < 15 or (state.get("actor") or {}).get("health", 1) <= 0:
+            log(f"Twitch: {user} redeemed «Анекдот», but the game isn't ready (not running, old script or dead)")
+            return
+        log(f"Twitch: {user} redeemed «Анекдот»")
+        self.zone_fired = {"kind": "anekdot", "user": user}
+        self.game.send("zone", None, f"anekdot|Анекдот|{nick} розповідає анекдот. Хліб, ковбаса і болти, під ногами")
+
+    SIXTY_TWO_NAME = "62"  # the reward's title, and the PDA caption
+
+    def on_sixty_two(self, user, redemption=None):
+        """«62»: the streamer's own clip «шиісят два» (gamedata\\sounds\\talker\\sixty_two*.ogg) is shouted 10 times at
+        once from all round the player, each copy from its own spot, at its own volume, pitch, speed and delay, so they
+        overlap and echo. At once, no queue, and no autosave (it's only a sound). Needs script version 15."""
+        nick = zone.clean_nick(user)
+        state = self.game.state() or {}
+        if (state.get("mod_version") or 0) < 15 or (state.get("actor") or {}).get("health", 1) <= 0:
+            log(f"Twitch: {user} redeemed «{self.SIXTY_TWO_NAME}», but the game isn't ready (not running, old script or dead)")
+            return
+        log(f"Twitch: {user} redeemed «{self.SIXTY_TWO_NAME}»")
+        self.zone_fired = {"kind": "62", "user": user}
+        self.game.send("zone", None, f"62|{self.SIXTY_TWO_NAME}|{nick} передає: шиісят два! Звідусіль")
+
+    def send_named(self, user, kind, name, community, weapon, side, text):
+        """A named man of a faction turns up near the player, at once (no queue; the game still autosaves first):
+        sim_default_<community>_<rank>, called <name> in the game, with <weapon> (a stock section; "" = his own gun)
+        and nothing else to shoot with. side: enemy, neutral or ally. The viewer's nickname goes on the label over his
+        head and the viewer speaks through him, like a Zone friend's. text: the PDA line under his name."""
+        nick = zone.clean_nick(user)
+        state = self.game.state() or {}
+        if (state.get("mod_version") or 0) < 15 or (state.get("actor") or {}).get("health", 1) <= 0:
+            log(f"Twitch: {user} redeemed «{name}», but the game isn't ready (not running, old script or dead)")
+            return False
+        log(f"Twitch: {user} redeemed «{name}»")
+        self.zone_fired = {"kind": kind, "user": user}
+        self.game.send("zone", None, f"npc:{kind}:{community}:{weapon}:{side}:{nick}|{name}|{text}")
+        return True
+
+    GOSHA_NAME = "Гоша"  # the PDA caption, and his name in the game
+
+    def on_gosha(self, user, redemption=None):
+        """«Гоша»: a Mercenary (найманець) of that name turns up 15-30 m away with a stock SPAS-12, hostile, and comes
+        for the player. Needs script version 15."""
+        self.send_named(user, "gosha", self.GOSHA_NAME, "killer", "wpn_spas12", "enemy",
+                        f"{zone.clean_nick(user)} кличе Гошу. Найманець із дробовиком уже йде по тебе")
+
     def zone_test(self, kind=None):
         """The window's test button: a Zone event at once, without a redemption."""
         who = (self.twitch.login if self.twitch and self.twitch.login else None) or "test"
@@ -3864,16 +3955,18 @@ class Talker:
             if ev.get("type") == "zone_spawned" and ev.get("nick"):
                 npc = dict(ev.get("npc") or {}, id=ev.get("id"))
                 self.link_viewer(ev["nick"], npc, from_zone=True)
-                self.zone_react("life", ev, npc)  # he's in the game now: the men around can see him
+                self.zone_react(ev.get("tag") or "life", ev, npc)  # he's in the game now: the men around can see him
+                if ev.get("tag") and ev.get("named") is False:
+                    log(f"  Zone: {ev['tag']} came as «{npc.get('name')}» (the game kept its own name for him)")
             elif ev.get("type") == "zone_done":
                 item = getattr(self, "zone_fired", None)
-                if ev.get("ok") and item and item.get("kind") != "life":
+                if ev.get("ok") and item and item.get("kind") != "life" and not ev.get("tag"):  # a man: once he's in
                     self.zone_react(item["kind"], dict(ev, monster=item.get("monster")))
                 saved = {"saved": ", autosaved first"}.get(ev.get("autosave"),
                                                          f", no autosave: {ev['autosave']}" if ev.get("autosave") else "")
                 if ev.get("ok"):
                     log(f"  Zone: done ({ev.get('section')}{' x' + str(ev['count']) if ev.get('count') else ''}{saved})")
-                elif item and item.get("kind") != "suslov" and self.zone.retry(item, time.time()):
+                elif item and item.get("kind") not in ("suslov", "giant", "vova", "anekdot", "gosha", "62") and self.zone.retry(item, time.time()):
                     log(f"  Zone: the game couldn't do it ({ev.get('reason')}), trying again in 30 s")
                 else:
                     log(f"  Zone: the game couldn't do it ({ev.get('reason')}), given up")
@@ -3903,6 +3996,29 @@ class Talker:
             return ("Out of thin air, right at the player's feet, two «Вогняна куля» artifacts and a sausage just fell "
                     "and lie on the ground in the shape of a dick. React: laugh, a crude joke about it, about Суслов "
                     "or about whoever sent it.")
+        if kind == "anekdot":
+            return ("Out of thin air, right at the player's feet, a loaf of bread, a sausage and a handful of bolts "
+                    "just fell on the ground, like the punchline of a joke. React: laugh, and tell a short stalker "
+                    "joke (анекдот) of your own, one or two sentences.")
+        if kind == "62":
+            return ("Out of nowhere a man's voice just started shouting «шиісят два» (Ukrainian-Russian surzhyk for 'sixty-two') "
+                    "from every side at once, over and over, near and far, high and low, echoing all round you, and "
+                    "there is nobody there. React confused and freaked out: what the hell is that, who is shouting, "
+                    "why sixty-two, is it the Zone, a controller (контролер) in your head, too much vodka? Swear, joke "
+                    "nervously, or ask the others if they hear it too.")
+        if kind == "gosha":
+            return (f"Out of thin air a man just appeared nearby: «{(spawned or {}).get('name') or 'Гоша'}», one of the "
+                    "найманці (mercenaries), with a shotgun, and he is coming to kill the player. A viewer sent him. "
+                    "Shout a warning, curse the mercenaries, or crack a grim joke about Гоша.")
+        if kind == "vova":
+            return ("Out of thin air a soldier just appeared nearby: «Вова Віст», one of the військові, with a machine "
+                    "gun that fires like crazy but only whistles and tickles, and he opens fire on everyone around "
+                    "except the player. React: duck and swear, laugh at the toy gun, or mock Вова.")
+        if kind == "giant":
+            return ("Out of thin air a pseudogiant (псевдогігант: a huge, ground-shaking mutant that stomps people flat) "
+                    "just appeared right nearby and is charging at you. A viewer sent it with the question «Хуй будеш?» "
+                    "(crude slang, 'will you have some dick?'). React in a panic: scream, swear filthily, a crude "
+                    "joke about the giant, the question or whoever sent it, then tell everyone to run or shoot.")
         if kind == "child":
             return (f"The Zone just spawned mutants ({ev.get('monster') or 'mutants'}, {ev.get('count') or 'a few'}) "
                     "nearby, and they are coming at you. Shout a warning, curse, or crack a grim joke.")
@@ -3933,7 +4049,7 @@ class Talker:
         if not state or not self.busy.acquire(timeout=10):
             return
         try:
-            fight = kind == "child" or (kind == "life" and ev.get("side") == "enemy")
+            fight = kind in ("child", "giant") or (kind == "life" and ev.get("side") == "enemy")
             spawned_id = (spawned or {}).get("id")
             men = [n for n in state.get("npcs", []) if isinstance(n, dict) and n.get("id") != spawned_id
                    and n.get("dist", 99) < 30 and not n.get("wounded") and not is_monolith(n)
@@ -4297,6 +4413,16 @@ class Talker:
                             self.on_zone(who)
                         elif arg == "suslov":  # «Шари Суслова», as if redeemed (it never waits anyway)
                             self.on_suslov(who)
+                        elif arg == "giant":  # «Хуй будеш?», as if redeemed (no queue either)
+                            self.on_giant(who)
+                        elif arg == "vova":  # «Вова Віст», as if redeemed (no queue either)
+                            self.on_vova(who)
+                        elif arg == "anekdot":  # «Анекдот», as if redeemed (no queue either)
+                            self.on_anekdot(who)
+                        elif arg == "gosha":  # «Гоша», as if redeemed (no queue either)
+                            self.on_gosha(who)
+                        elif arg == "62":  # «62», as if redeemed (no queue either)
+                            self.on_sixty_two(who)
                         else:  # "zone gift|life|child|any": at once
                             self.zone_test(arg)
                 else:
