@@ -45,7 +45,9 @@ HAVE = { medkit = true, af_medusa = true, wpn_ak74 = true, sim_default_bandit_2 
   tushkano_normal = true, gigant_strong = true }
 function system_ini() return {
   section_exist = function(_, s) return HAVE[s] == true end,
-  r_string = function(_, s, k) return "name_" .. s end } end
+  r_string = function(_, s, k) return "name_" .. s end,
+  r_float = function(_, s, k) return COST[s] or 1000 end } end
+COST = { medkit = 250, af_medusa = 4000, wpn_ak74 = 4000, vodka = 40, wpn_addon_silencer = 200 }
 game = { translate_string = function(s) return "T(" .. s .. ")" end }
 next_id = 100
 function alife() return {
@@ -125,7 +127,14 @@ c, n, ev = take("created"), take("news"), events()
 check(len(c) == 1 and c[0]["parent"] == 0 and c[0]["sec"] in ("medkit", "af_medusa", "wpn_ak74"),
       f"gift: one real item made in the backpack {[dict(x) for x in c]}")
 sec = c[0]["sec"] if c else "?"
-check(n and n[0] == f"Дар Зони (viewer)|Зона бажає милосердя — отримано T(name_{sec}) в рюкзак (шанс 8.3%)",
+def gift_pct(sec, have=("medkit", "af_medusa", "wpn_ak74")):
+    costs = {"medkit": 250, "af_medusa": 4000, "wpn_ak74": 4000, "vodka": 40, "wpn_addon_silencer": 200}
+    w = {s: (100 / max(costs[s], 10)) ** 0.6 * (0.15 if s.startswith("wpn_addon_") else 1) for s in have}
+    x = 25 * w[sec] / sum(w.values())
+    return f"{x:.0f}%" if x >= 9.95 else f"{x:.1f}%" if x >= 0.095 else f"{x:.2f}%"
+
+
+check(n and n[0] == f"Дар Зони (viewer)|Зона бажає милосердя — отримано T(name_{sec}) в рюкзак (шанс {gift_pct(sec)})",
       f"gift: PDA line with the item's name comes first {n}")
 check(any(x.startswith("relocate|in|") for x in n), "gift: the game's 'item received' notice")
 check(ev and ev[0]["type"] == "zone_done" and ev[0]["ok"] and ev[0]["section"] == sec, f"gift: zone_done ok {ev}")
@@ -270,4 +279,19 @@ inbox("zone||gift|c|t")
 step(300)
 ev = [e for e in events() if e["type"] == "zone_done"]  # (the game also reports the player's death)
 check(not take("saves") and ev and ev[0].get("autosave") == "dead", f"dead: no save {ev}")
+
+# gift odds follow the price, add-ons rarer than their price: over many gifts
+L.execute("db.actor._alive = true; HAVE.vodka = true; HAVE.wpn_addon_silencer = true; TUTORIAL = true")
+from collections import Counter
+got = Counter()
+for _ in range(400):
+    inbox("zone||gift|c|t")
+    step(300)
+    got.update(x["sec"] for x in take("created"))
+    events()
+    take("news")
+print("  gifts:", dict(got))
+check(got["vodka"] > got["medkit"] > got["wpn_addon_silencer"] and got["vodka"] > 5 * got["wpn_addon_silencer"],
+      "cheap things come most; a cheap silencer still much rarer than vodka or a medkit")
+check(got["medkit"] > 2 * got["wpn_ak74"], "a medkit (250) comes far more often than an AK (4000)")
 print("OK" if ok else "FAIL")

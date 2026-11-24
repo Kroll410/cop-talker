@@ -2,8 +2,8 @@
 every stalker section and every mutant in companion/zone.py must exist in the game's configs (configs.db + patches),
 and no item may be a quest item. Unpacks the configs into a temp folder (deleted after).
 
-Usage: python tools/check_zone_sections.py ["C:\\Games\\S.T.A.L.K.E.R. Call of Pripyat"]
-(default: STALKER_DIR from settings.ini)"""
+Usage: python tools/check_zone_sections.py [--odds] ["C:\\Games\\S.T.A.L.K.E.R. Call of Pripyat"]
+(default: STALKER_DIR from settings.ini). --odds also prints each gift's chance (the game script's formula)."""
 import re
 import shutil
 import subprocess
@@ -16,9 +16,30 @@ sys.path.insert(0, str(ROOT / "companion"))
 import zone  # noqa: E402
 
 
+ODDS = "--odds" in sys.argv
+ARGS = [a for a in sys.argv[1:] if a != "--odds"]
+
+
+def gift_curve(lua):
+    """ZONE_PRICE_POWER and ZONE_ITEM_RARER as the game script has them (the one place they're set)."""
+    power = float(re.search(r"local ZONE_PRICE_POWER = ([\d.]+)", lua).group(1))
+    rarer = [(pat, float(f)) for pat, f in re.findall(r'\{ "([^"]+)", ([\d.]+) \}',
+                                                    re.search(r"local ZONE_ITEM_RARER = (\{.*?\} \})", lua).group(1))]
+    return power, rarer
+
+
+def gift_weight(sec, cost, power, rarer):
+    """Same as zone_item_weight in talker_bridge.script."""
+    w = (100 / max(cost, 10)) ** power
+    for pat, f in rarer:
+        if re.search(pat, sec):
+            w *= f
+    return w
+
+
 def game_dir():
-    if len(sys.argv) > 1:
-        return Path(sys.argv[1])
+    if ARGS:
+        return Path(ARGS[0])
     for name in ("settings.ini", "settings.example.ini"):
         p = ROOT / name
         if p.exists():
@@ -76,7 +97,8 @@ if not secs:
     sys.exit(f"No configs found in {game}")
 
 lua = (ROOT / "mod/gamedata/scripts/talker_bridge.script").read_text(encoding="utf-8")
-items = re.findall(r'"([a-z0-9_.\-]+)"', lua[lua.index("local ZONE_ITEMS"):lua.index("local ZONE_PEOPLE")])
+start = lua.index("local ZONE_ITEMS")
+items = re.findall(r'"([a-z0-9_.\-]+)"', lua[start:lua.index("\n}", start)])  # the table only
 factions = re.findall(r'"([a-z]+)"', lua[lua.index("local ZONE_PEOPLE"):].split("\n", 1)[0])
 people = [f"sim_default_{f}_{r}" for f in factions for r in range(5)]
 bad = [i for i in items if i not in secs]
@@ -86,5 +108,20 @@ kinds_without = [m[0] for m in zone.MONSTERS if not any(s in secs for s in m[1])
 print(f"items: {len(items) - len(bad)}/{len(items)} exist; missing {bad}; quest or free {quest}")
 print(f"stalkers: {sum(p in secs for p in people)}/{len(people)} exist (missing ones are skipped)")
 print(f"mutants: {sum(s in secs for s in mutants)}/{len(mutants)} sections exist; kinds with none: {kinds_without}")
+if ODDS:
+    costs = {i: float(get(i, "cost") or 1000) for i in items if i in secs}
+    power, rarer = gift_curve(lua)
+    weights = {i: gift_weight(i, c, power, rarer) for i, c in costs.items()}
+    total = sum(weights.values())
+    print(f"gift odds by price (ZONE_PRICE_POWER {power}, rarer {rarer}): of all gifts / of all Zone events")
+    for lo, hi in ((0, 100), (100, 500), (500, 2000), (2000, 10000), (10000, 10 ** 9)):
+        tier = [i for i, c in costs.items() if lo <= c < hi]
+        share = sum(weights[i] for i in tier) / total
+        each = share / len(tier) if tier else 0
+        print(f"  {lo:>5}-{hi if hi < 10 ** 9 else '':<6} {len(tier):3} items  {share * 100:5.1f}% / {share * 25:5.2f}%"
+              f"   one of them ~{each * 100:.2f}%")
+    print("gift odds (of all gifts / of all Zone events):")
+    for i in sorted(weights, key=weights.get, reverse=True):
+        print(f"  {costs[i]:7.0f}  {i:34} {weights[i] / total * 100:6.2f}%  {weights[i] / total * 25:6.3f}%")
 ok = not bad and not quest and not kinds_without and any(p in secs for p in people)
 print("OK" if ok else "FAIL")

@@ -940,6 +940,24 @@ local ZONE_ITEMS = {
 	"antirad", "drug_booster", "drug_coagulant", "drug_psy_blockade", "drug_antidot", "drug_radioprotector",
 	"drug_anabiotic", "detector_simple", "detector_advanced", "detector_elite", "detector_scientific",
 }
+-- Gift odds, all in these lines: the cheaper an item (its "cost" in the game's configs, the base of trade
+-- prices), the more often it comes: weight = (100 / cost) ^ ZONE_PRICE_POWER. 0.6: bread (10) comes ~40x as
+-- often as an exoskeleton (50000); higher = expensive things rarer still, 0 = every item alike.
+-- Weapon add-ons (scopes, silencer, grenade launchers) are rarer than their price says: x0.15, so a 200-coupon
+-- silencer comes far less often than vodka or a medkit. Same formula: tools/check_zone_sections.py --odds.
+local ZONE_PRICE_POWER = 0.6
+local ZONE_ITEM_RARER = { { "^wpn_addon_", 0.15 } }
+
+local function zone_item_weight(sec)
+	local ok, cost = pcall(function() return system_ini():r_float(sec, "cost") end)
+	cost = (ok and cost and cost > 0) and cost or 1000
+	local w = (100 / math.max(cost, 10)) ^ ZONE_PRICE_POWER
+	for _, rule in ipairs(ZONE_ITEM_RARER) do
+		if string.find(sec, rule[1]) then w = w * rule[2] end
+	end
+	return w
+end
+
 local ZONE_PEOPLE = { "stalker", "bandit", "duty", "freedom", "killer", "military", "monolith", "ecolog", "zombied" }
 local zone_pending = {}  -- id of a man or mutant just created -> what to do once he is in the game
 local zone_friends = {}  -- id of a Zone friend -> true: kept a Loner and your friend while he lives
@@ -961,12 +979,32 @@ local function section_ok(sec)
 	return ok and yes and true or false
 end
 
+-- An item the game has, by the weights above; also its share of all of them (0..1).
+local function pick_gift()
+	local have, total = {}, 0
+	for _, sec in ipairs(ZONE_ITEMS) do
+		if section_ok(sec) then
+			local w = zone_item_weight(sec)
+			table.insert(have, { sec, w })
+			total = total + w
+		end
+	end
+	if total <= 0 then return nil end
+	local x = math.random() * total
+	for _, h in ipairs(have) do
+		x = x - h[2]
+		if x <= 0 then return h[1], h[2] / total end
+	end
+	local last = have[#have]
+	return last[1], last[2] / total
+end
+
 local function pick_existing(list)
 	local have = {}
 	for _, sec in ipairs(list) do
 		if section_ok(sec) then table.insert(have, sec) end
 	end
-	return have[1] and have[math.random(#have)] or nil, #have
+	return have[1] and have[math.random(#have)] or nil
 end
 
 -- A walkable spot min_d..max_d metres from you, in a random direction (a wall in the way: a closer one).
@@ -1010,19 +1048,19 @@ local function zone_event(text, save)
 	if not zone_seeded then zone_seeded = true; math.randomseed(os.time()) end
 	local what, caption, msg = string.match(text, "^([^|]*)|([^|]*)|(.*)$")
 	what = what or text
-	local function say(item, of)
+	local function say(item, share)
 		if not msg or msg == "" then return end
 		local line = string.gsub(msg, "{item}", (string.gsub(item or "", "%%", "%%%%")))
-		-- "{chance:25}": a gift's chance (25%) shared by the items the game has: this item's own chance
-		line = string.gsub(line, "{chance:([%d.]+)}", function(base) return zone_pct(tonumber(base) / (of or 1)) end)
+		-- "{chance:25}": a gift's chance (25%) times this item's share of all gifts: its own chance
+		line = string.gsub(line, "{chance:([%d.]+)}", function(base) return zone_pct(tonumber(base) * (share or 1)) end)
 		show_line(nil, line, caption, 12000)
 		pcall(xr_sound.set_sound_play, db.actor:id(), "pda_tips")
 	end
 	local done = { type = "zone_done", what = what, ok = false, autosave = save }
 	if what == "gift" then
-		local sec, count = pick_existing(ZONE_ITEMS)
+		local sec, share = pick_gift()
 		if not sec then done.reason = "no item"; return append_event(done) end
-		say(item_title(sec) or sec, count)
+		say(item_title(sec) or sec, share)
 		local actor = db.actor
 		alife():create(sec, actor:position(), actor:level_vertex_id(), actor:game_vertex_id(), actor:id())
 		pcall(news_manager.relocate_item, actor, "in", sec)
