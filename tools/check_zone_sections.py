@@ -81,8 +81,8 @@ factions = re.findall(r'"([a-z]+)"', lua[lua.index("local ZONE_PEOPLE"):].split(
 people = [f"sim_default_{f}_{r}" for f in factions for r in range(5)]
 bad = [i for i in items if i not in secs]
 quest = [i for i in items if i in secs and (get(i, "quest_item") not in (None, "false") or get(i, "cost") in (None, "0"))]
-mutants = [s for _, ss, _ in zone.MONSTERS for s in ss]
-kinds_without = [name for name, ss, _ in zone.MONSTERS if not any(s in secs for s in ss)]
+mutants = [s for m in zone.MONSTERS for s in m[1]]
+kinds_without = [m[0] for m in zone.MONSTERS if not any(s in secs for s in m[1])]
 print(f"items: {len(items) - len(bad)}/{len(items)} exist; missing {bad}; quest or free {quest}")
 print(f"stalkers: {sum(p in secs for p in people)}/{len(people)} exist (missing ones are skipped)")
 print(f"mutants: {sum(s in secs for s in mutants)}/{len(mutants)} sections exist; kinds with none: {kinds_without}")

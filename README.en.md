@@ -84,8 +84,14 @@ The app never adds rewards to your channel: you make them on Twitch. In `TWITCH_
 
 **The "Zone" reward** (Affiliate/Partner). Make a channel-points reward on Twitch with no message and pick it in Settings → `TWITCH_ZONE_REWARD` (**Refresh** lists all the channel's rewards; you can also type the title). Each redemption rolls a random event right away, and the PDA shows that the Zone heard it. The first event in the queue happens at once; each one behind it waits 5-7 minutes after the one before (`TWITCH_ZONE_GAP`). With `0`, every event happens at once:
 - **Дар Зони** (gift, 25%): a random item of the game (no quest items) in your backpack;
-- **Життя для Зони** (life, 50%): a random stalker appears 15-30 m away, half the time a friend who follows you, half an enemy. He wears the viewer's nick until he dies;
-- **Дитя Зони** (child, 25%): 1 to 10 mutants of one kind appear 25-50 m away and come for you. Weak ones come in packs, strong ones mostly alone (10 pseudogiants: about 1 in 100).
+- **Життя для Зони** (life, 50%): a stalker appears 15-30 m away, half the time a friend who follows you (always a Loner), half an enemy of any faction. He wears the viewer's nick until he dies;
+- **Дитя Зони** (child, 25%): mutants of one kind appear 25-50 m away and come for you. Mostly one or two (84%), 3-4 in 13% of cases, 5 or more in 3%. Weak kinds (tushkans, blind dogs, flesh) come more often and sometimes in packs; dangerous ones (bloodsucker, chimera, pseudogiant) seldom and almost always alone. The biggest pack is `TWITCH_ZONE_PACK_MAX` (default 6). All the odds are in one table in `companion/zone.py`; `python companion/zone.py 6` prints them.
+
+The PDA line shows the chance of what happened, e.g. "— шанс 4.1%".
+
+After an event, one or two NPCs nearby react out loud: surprise, a joke, a curse or a warning. This works in Chat only mode too. A friend the Zone sent greets you first. Several events in a row get one reaction per 20 seconds.
+
+Before each Zone event the game is saved as `talker_autosave` (one save, overwritten each time), so you can always load back. No save while you're dead or talking, during an emission or a scripted scene, or if one was made in the last 10 seconds.
 
 The Twitch tab shows the queue: what was rolled and when it happens. It also has buttons to try it without a real redemption: **Redeem (debug)** (like a real one, queued) and **Now: …** (at once). Needs the v14 game script: load a save after updating.
 

@@ -39,19 +39,47 @@ try:
     sides = Counter(r["side"] for r in rolls if r["kind"] == "life")
     check(abs(sides["ally"] / sum(sides.values()) - .5) < .02, f"Життя: half friends, half enemies {dict(sides)}")
     children = [r for r in rolls if r["kind"] == "child"]
-    check(all(1 <= r["count"] <= 10 for r in children), "Дитя: 1 to 10 mutants")
+    check(all(1 <= r["count"] <= zone.PACK_MAX for r in children), f"Дитя: 1 to {zone.PACK_MAX} mutants (default)")
 
-    def p10(name):
-        r = next(m[2] for m in zone.MONSTERS if m[0] == name)
-        w = zone.count_weights(r)
-        return w[9] / sum(w)
+    # pack sizes: mostly one or two, big packs rare, dangerous kinds rarer and smaller (over many rolls)
+    def packs(pack_max, n=60000, seed=8):
+        g = random.Random(seed)
+        return [zone.roll("v", "child", g, pack_max) for _ in range(n)]
 
-    check(0.008 < p10("псевдогігант") < 0.012, f"10 pseudogiants: about 1% ({p10('псевдогігант'):.4f})")
-    r = random.Random(2)
-    tush = Counter(r.choices(range(1, 11), zone.count_weights(zone.MONSTERS[0][2]))[0] for _ in range(20000))
-    check(tush.most_common(1)[0][0] == 10, f"tushkans: ten is the likeliest pack {tush.most_common(3)}")
-    giant = Counter(r.choices(range(1, 11), zone.count_weights(zone.MONSTERS[-1][2]))[0] for _ in range(20000))
-    check(giant.most_common(1)[0][0] == 1, f"pseudogiants: mostly one {giant.most_common(3)}")
+    for pm in (6, 10):
+        got = packs(pm)
+        size = Counter(r["count"] for r in got)
+        share = {k: v / len(got) for k, v in size.items()}
+        small, mid, big = (sum(share.get(c, 0) for c in rng_) for rng_ in (range(1, 3), range(3, 5), range(5, 11)))
+        check(max(size) <= pm, f"max {pm}: never more ({max(size)})")
+        check(small > .75 and mid < .2 and big < .06,
+              f"max {pm}: 1-2: {small:.0%}, 3-4: {mid:.0%}, 5+: {big:.1%} (mostly small, big rare)")
+        check(all(share.get(c, 0) >= share.get(c + 1, 0) for c in range(1, pm)),
+              "each extra mutant is less likely than one fewer")
+    got = packs(10)
+    kinds = Counter(r["monster"] for r in got)
+    check(kinds["тушкан"] > 5 * kinds["псевдогігант"] and kinds["сліпий пес"] > 3 * kinds["химера"],
+          f"weak kinds come far more often than dangerous ones {kinds.most_common(3)} ... гігант {kinds['псевдогігант']}")
+    big_giants = sum(1 for r in got if r["monster"] == "псевдогігант" and r["count"] >= 3) / len(got)
+    big_dogs = sum(1 for r in got if r["monster"] == "сліпий пес" and r["count"] >= 3) / len(got)
+    check(big_giants < 0.001 and big_dogs > 10 * big_giants, f"3+ pseudogiants: {big_giants:.4%}, 3+ dogs: {big_dogs:.2%}")
+    one = next(r for r in got if r["monster"] == "тушкан" and r["count"] == 1)
+    seen = sum(1 for r in got if r["monster"] == "тушкан" and r["count"] == 1) / len(got)
+    check(abs(one["chance"] / zone.chance({"kind": "child"}) - seen) < 0.01,
+          f"the chance it carries is the real one (1 tushkan: {one['chance'] / .25:.3f} vs seen {seen:.3f})")
+    check("1-2:" in zone.odds_report(6) and "псевдогігант" in zone.odds_report(6), "odds_report lists the odds")
+
+    # the chance in the PDA line
+    check(zone.pct(0.25) == "25%" and zone.pct(0.0412) == "4.1%" and zone.pct(0.0004) == "0.04%"
+          and zone.pct(0.0996) == "10%", "percent text: 25%, 4.1%, 0.04%")
+    life = zone.roll("V", "life", random.Random(1))
+    check(abs(life["chance"] - 0.25) < 1e-9 and "(шанс 25%)" in zone.command(life)[2], f"life: {zone.command(life)[2]}")
+    kid = dict(zone.roll("V", "child", random.Random(3)), count=4, monster="сліпий пес")
+    kid["chance"] = zone.chance(kid)
+    check(zone.command(kid)[2].endswith("— шанс " + zone.pct(kid["chance"])), f"child: {zone.command(kid)[2]}")
+    check("{chance:25}" in zone.command({"kind": "gift", "user": "V"})[2], "gift: the game divides 25% by its items")
+    check(zone.command({"kind": "child", "user": "V", "monster": "снорк", "sections": ["snork_weak"], "count": 2})[2]
+          .count("шанс") == 1, "an old queued event (no chance saved) gets it worked out")
 
     # ------------------------------------------------------------ the game line
     what, cap, text = zone.command({"kind": "gift", "user": "Vasya"})
@@ -131,6 +159,7 @@ try:
     t = talker.Talker.__new__(talker.Talker)
     t.game = type("G", (), {"send": lambda self, *x: sent.append(x)})()
     t.twitch, t.zone_reported = None, None
+    t.zone_react = lambda *a, **k: None  # the men's reactions: tools/test_zone_react.py
     t.zone = zone.ZoneQueue(tmp / "zq.json", (300, 420), random.Random(5))
     t.twitch_links, t.twitch_names, t.zone_links, t.left_npc = {}, {}, set(), {}
     t.LINKS_FILE = tmp / "links.json"

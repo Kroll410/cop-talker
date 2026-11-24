@@ -249,6 +249,7 @@ TWITCH_LINKS = os.environ.get("TWITCH_LINKS", "1") != "0"
 TWITCH_BLOCKED = [w.strip().lower() for w in os.environ.get("TWITCH_BLOCKED", "").split(",") if w.strip()]
 # Zone events: the title of a channel-points reward you made on Twitch (no message). Empty = off.
 TWITCH_ZONE_REWARD = os.environ.get("TWITCH_ZONE_REWARD", "").strip()
+TWITCH_ZONE_PACK_MAX = int(os.environ.get("TWITCH_ZONE_PACK_MAX", "6") or 6)  # most mutants one event brings
 TWITCH_ZONE_GAP = os.environ.get("TWITCH_ZONE_GAP", "5-7")  # minutes between two Zone events; 0 = at once
 
 LEVELS = {"zaton": "Затон", "jupiter": "Юпітер", "pripyat": "Прип'ять",
@@ -2896,7 +2897,8 @@ class Talker:
         self.load_links()        # kept in twitch_links.json across restarts
         self.left_npc = {}       # viewer -> the NPC he just left with "%%"
         self.next_link_sync = 0.0
-        self.zone = zone.ZoneQueue(ROOT / "zone_queue.json", zone.parse_gap(TWITCH_ZONE_GAP))
+        self.zone = zone.ZoneQueue(ROOT / "zone_queue.json", zone.parse_gap(TWITCH_ZONE_GAP),
+                                   pack_max=TWITCH_ZONE_PACK_MAX)
         self.zone_reported = None
         if TWITCH_ENABLED:
             from twitch import Twitch
@@ -3848,10 +3850,15 @@ class Talker:
             if ev.get("type") == "zone_spawned" and ev.get("nick"):
                 npc = dict(ev.get("npc") or {}, id=ev.get("id"))
                 self.link_viewer(ev["nick"], npc, from_zone=True)
+                self.zone_react("life", ev, npc)  # he's in the game now: the men around can see him
             elif ev.get("type") == "zone_done":
                 item = getattr(self, "zone_fired", None)
+                if ev.get("ok") and item and item.get("kind") != "life":
+                    self.zone_react(item["kind"], dict(ev, monster=item.get("monster")))
+                saved = {"saved": ", autosaved first"}.get(ev.get("autosave"),
+                                                         f", no autosave: {ev['autosave']}" if ev.get("autosave") else "")
                 if ev.get("ok"):
-                    log(f"  Zone: done ({ev.get('section')}{' x' + str(ev['count']) if ev.get('count') else ''})")
+                    log(f"  Zone: done ({ev.get('section')}{' x' + str(ev['count']) if ev.get('count') else ''}{saved})")
                 elif item and self.zone.retry(item, time.time()):
                     log(f"  Zone: the game couldn't do it ({ev.get('reason')}), trying again in 30 s")
                 else:
@@ -3868,6 +3875,79 @@ class Talker:
             report("REWARDS", json.dumps(self.twitch.list_rewards(), ensure_ascii=False))
         except Exception as exc:
             report("REWARDS_ERROR", str(exc)[:160])
+
+    ZONE_REACT_DELAY = 3.0      # seconds: let the mutants appear before anyone shouts
+    ZONE_REACT_COOLDOWN = 20.0  # several events close together: one reaction, not a pile of them
+
+    def zone_what(self, kind, ev, spawned=None):
+        """What the men around just saw, for the AI (said by them, never by the viewer)."""
+        if kind == "gift":
+            name = clean_game_text(ev.get("name") or "") or "something"
+            return (f"Out of thin air an item ({name}) just landed in the player's backpack: a gift of the Zone. "
+                    "React: surprise, envy, a superstition or a joke.")
+        if kind == "child":
+            return (f"The Zone just spawned mutants ({ev.get('monster') or 'mutants'}, {ev.get('count') or 'a few'}) "
+                    "nearby, and they are coming at you. Shout a warning, curse, or crack a grim joke.")
+        who = (spawned or {}).get("name") or "a stalker"
+        if ev.get("side") == "ally":
+            return (f"A stalker ({who}) just appeared out of thin air nearby and joined the player as his companion. "
+                    "React: surprise, suspicion or a joke.")
+        return (f"A hostile stalker ({who}) just appeared out of thin air nearby and is going for the player. "
+                "Shout a warning or curse.")
+
+    def zone_react(self, kind, ev, spawned=None, background=True):
+        """Men nearby react out loud to a Zone event (also in chat-only mode: it's a viewer's redeem). The friend the
+        Zone sent greets the player first. One reaction per ZONE_REACT_COOLDOWN, however many events fire."""
+        now = time.time()
+        if now < getattr(self, "next_zone_react", 0):
+            return
+        self.next_zone_react = now + self.ZONE_REACT_COOLDOWN
+        greet = spawned if kind == "life" and ev.get("side") == "ally" else None
+        args = (kind, ev, spawned, greet)
+        if background:
+            threading.Thread(target=self._zone_react, args=args, daemon=True).start()
+        else:
+            self._zone_react(*args)
+
+    def _zone_react(self, kind, ev, spawned, greet):
+        time.sleep(self.ZONE_REACT_DELAY)
+        state = self.game.state()
+        if not state or not self.busy.acquire(timeout=10):
+            return
+        try:
+            fight = kind == "child" or (kind == "life" and ev.get("side") == "enemy")
+            spawned_id = (spawned or {}).get("id")
+            men = [n for n in state.get("npcs", []) if isinstance(n, dict) and n.get("id") != spawned_id
+                   and n.get("dist", 99) < 30 and not n.get("wounded") and not is_monolith(n)
+                   and n.get("relation") != "enemy" and (fight or not n.get("in_combat"))]
+            men.sort(key=lambda n: (not n.get("following"), n.get("dist", 99)))
+            what = self.zone_what(kind, ev, spawned)
+            said = []
+            if greet:
+                here = next((n for n in state.get("npcs", []) if isinstance(n, dict) and n.get("id") == spawned_id),
+                            None) or dict(greet, relation="friend")
+                line = self.brain.reply(here, state, "", [], "", "react", extra={"what": (
+                    f"The Zone just brought you here, out of thin air, next to the player: from now on you go with "
+                    f"him as his companion (a viewer called {ev.get('nick') or 'someone'} sent you). Greet him "
+                    "briefly, in character.")})
+                if line:
+                    log(f"  Zone friend {here.get('name')}: {line}")
+                    self.speak(here, line, state, note="(appeared out of nowhere and joined the player)")
+                    said.append((here.get("name"), strip_tags(line)))
+            for npc in men[:1 if greet else 2]:
+                if said and random.random() < 0.4:
+                    break  # a second man only sometimes
+                extra = what + "".join(f' {name} just said: "{line}".' for name, line in said)
+                line = self.brain.reply(npc, state, "", [], "", "react", extra={"what": extra})
+                if not line:
+                    continue
+                log(f"  {npc.get('name')} reacts to the Zone: {line}")
+                self.speak(npc, line, state, note="(reacting to something the Zone did)")
+                said.append((npc.get("name"), strip_tags(line)))
+        except Exception as exc:
+            log(f"zone reaction error: {exc!r}")
+        finally:
+            self.busy.release()
 
     def report_zone(self, force=False):
         """The queue for the window's Twitch tab (each line: what, whose, in how many seconds)."""

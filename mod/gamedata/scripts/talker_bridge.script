@@ -905,9 +905,14 @@ end
 -- ------------------------------------------------------------- Zone events (a Twitch channel-points reward)
 -- The app rolls the event and sends "zone||<what>|<PDA caption>|<PDA text>"; the PDA line comes first, then:
 --   gift                  a random item of the game lands in your backpack ("{item}" in the text = its name)
---   life:ally:<nick>      a random stalker (any faction, rank, gear) appears 15-30 m away and follows you
---   life:enemy:<nick>     ... and attacks you; both wear the viewer's nickname until they die
+--   life:ally:<nick>      a Loner (free stalker, any rank and gear) appears 15-30 m away and follows you
+--                         (and stays your friend while he lives)
+--   life:enemy:<nick>     a random stalker of any faction attacks you; both wear the viewer's nickname until they die
 --   child:<n>:<s1>,<s2>   n mutants (of whichever of these sections the game has) 25-50 m away, coming for you
+-- Before each event the game is saved as "talker_autosave" (one save, overwritten), the way the game's own
+-- scenario autosaves do it; the event then waits 1.5 s so the save is surely made before anything appears.
+-- No save while you are dead or talking, during an emission or a tutorial/scripted scene, or if one was made
+-- in the last 10 s (two events close together: one save).
 -- Only sections the game really has are used; quest and dev items are never in the list. Checked against the
 -- game's own configs (configs.db + patches): every item here exists, has a cost and no quest_item flag; unique
 -- named weapons (Nimble's orders, Snag's...) are left out so no quest finds them in your pack too early.
@@ -937,7 +942,19 @@ local ZONE_ITEMS = {
 }
 local ZONE_PEOPLE = { "stalker", "bandit", "duty", "freedom", "killer", "military", "monolith", "ecolog", "zombied" }
 local zone_pending = {}  -- id of a man or mutant just created -> what to do once he is in the game
+local zone_friends = {}  -- id of a Zone friend -> true: kept a Loner and your friend while he lives
+local ZONE_SAVE = "talker_autosave"
+local last_zone_save = nil  -- time_global() of the last autosave
+local zone_delayed = {}     -- events waiting for their autosave to be written: { text, at, save }
+local next_friend_check = 0
 local zone_seeded = false
+
+-- "4.1%": whole numbers from 10% up, one decimal below, two under 0.1% (same as zone.py's pct)
+local function zone_pct(x)
+	if x >= 9.95 then return string.format("%d%%", math.floor(x + 0.5)) end
+	if x >= 0.095 then return string.format("%.1f%%", x) end
+	return string.format("%.2f%%", x)
+end
 
 local function section_ok(sec)
 	local ok, yes = pcall(function() return system_ini():section_exist(sec) end)
@@ -949,7 +966,7 @@ local function pick_existing(list)
 	for _, sec in ipairs(list) do
 		if section_ok(sec) then table.insert(have, sec) end
 	end
-	return have[1] and have[math.random(#have)] or nil
+	return have[1] and have[math.random(#have)] or nil, #have
 end
 
 -- A walkable spot min_d..max_d metres from you, in a random direction (a wall in the way: a closer one).
@@ -989,31 +1006,33 @@ local function zone_provoke(obj)
 	obj:hit(h)
 end
 
-local function zone_event(text)
+local function zone_event(text, save)
 	if not zone_seeded then zone_seeded = true; math.randomseed(os.time()) end
 	local what, caption, msg = string.match(text, "^([^|]*)|([^|]*)|(.*)$")
 	what = what or text
-	local function say(item)
+	local function say(item, of)
 		if not msg or msg == "" then return end
 		local line = string.gsub(msg, "{item}", (string.gsub(item or "", "%%", "%%%%")))
+		-- "{chance:25}": a gift's chance (25%) shared by the items the game has: this item's own chance
+		line = string.gsub(line, "{chance:([%d.]+)}", function(base) return zone_pct(tonumber(base) / (of or 1)) end)
 		show_line(nil, line, caption, 12000)
 		pcall(xr_sound.set_sound_play, db.actor:id(), "pda_tips")
 	end
-	local done = { type = "zone_done", what = what, ok = false }
+	local done = { type = "zone_done", what = what, ok = false, autosave = save }
 	if what == "gift" then
-		local sec = pick_existing(ZONE_ITEMS)
+		local sec, count = pick_existing(ZONE_ITEMS)
 		if not sec then done.reason = "no item"; return append_event(done) end
-		say(item_title(sec) or sec)
+		say(item_title(sec) or sec, count)
 		local actor = db.actor
 		alife():create(sec, actor:position(), actor:level_vertex_id(), actor:game_vertex_id(), actor:id())
 		pcall(news_manager.relocate_item, actor, "in", sec)
-		done.ok, done.section = true, sec
+		done.ok, done.section, done.name = true, sec, item_title(sec)
 		return append_event(done)
 	end
 	local side, nick = string.match(what, "^life:(%a+):(.*)$")
 	if side == "ally" or side == "enemy" then
 		local people = {}
-		for _, f in ipairs(ZONE_PEOPLE) do
+		for _, f in ipairs(side == "ally" and { "stalker" } or ZONE_PEOPLE) do  -- a friend is always a Loner
 			for rank = 0, 4 do table.insert(people, "sim_default_" .. f .. "_" .. rank) end
 		end
 		local sec = pick_existing(people)
@@ -1045,9 +1064,31 @@ local function zone_event(text)
 	append_event(done)
 end
 
+-- A Zone friend: a Loner (community "stalker"), friendly to you, also in A-Life (so the simulation keeps it).
+local function zone_befriend(obj)
+	if obj:character_community() ~= "stalker" then
+		pcall(function() obj:set_character_community("stalker", 0, 0) end)
+	end
+	if grudges[obj:id()] then grudges[obj:id()][db.actor:id()] = nil end
+	pcall(function() obj:set_relation(game_object.friend, db.actor) end)
+	pcall(function() obj:force_set_goodwill(1000, db.actor) end)
+	pcall(function() alife():object(obj:id()):force_set_goodwill(1000, db.actor:id()) end)
+end
+
 -- Men and mutants from zone_event come into the game a moment later: then they get their side and nickname.
 local function update_zone()
 	local now = time_global()
+	if next(zone_friends) and now >= next_friend_check then
+		next_friend_check = now + 2000  -- a stray shot or the game's own logic turned him: he's your friend again
+		for id in pairs(zone_friends) do
+			local obj = level.object_by_id(id)
+			if not obj or not obj:alive() then
+				zone_friends[id] = nil
+			elseif obj:relation(db.actor) ~= game_object.friend or obj:character_community() ~= "stalker" then
+				zone_befriend(obj)
+			end
+		end
+	end
 	for id, p in pairs(zone_pending) do
 		local obj = level.object_by_id(id)
 		local st = db.storage[id]
@@ -1058,9 +1099,8 @@ local function update_zone()
 				zone_pending[id] = nil
 				if p.what == "life" then
 					if p.side == "ally" then
-						pcall(function() obj:set_relation(game_object.friend, db.actor) end)
-						pcall(function() obj:force_set_goodwill(1000, db.actor) end)
-						pcall(function() alife():object(id):force_set_goodwill(1000, db.actor:id()) end)
+						zone_befriend(obj)
+						zone_friends[id] = true
 						local okf, err = pcall(start_follow, obj)
 						if not okf then log_error("zone follow: " .. tostring(err)) end
 					else
@@ -1077,6 +1117,54 @@ local function update_zone()
 		elseif now > p.till then
 			zone_pending[id] = nil
 			log_error("zone: " .. tostring(id) .. " never came into the game")
+		end
+	end
+end
+
+-- Can the game be saved right now? (the reason it can't, otherwise)
+local function zone_save_blocked()
+	if not db.actor:alive() or db.actor.health <= 0 then return "dead" end
+	if emission_active() then return "emission" end
+	if db.actor:is_talking() then return "talking" end
+	local okt, tutorial = pcall(function() return level.has_active_tutorial() end)
+	if okt and tutorial then return "scene" end
+	local okw, wfx = pcall(function() return level.is_wfx_playing() end)
+	if okw and wfx then return "scene" end
+	return nil
+end
+
+-- Saves before a Zone event. Returns "saved", or why it didn't ("recent", "dead", "emission", ...).
+local function zone_autosave()
+	local now = time_global()
+	if last_zone_save and now - last_zone_save < 10000 then return "recent" end
+	local why = zone_save_blocked()
+	if why then return why end
+	get_console():execute("save " .. ZONE_SAVE)
+	last_zone_save = now
+	return "saved"
+end
+
+-- A Zone line from the app: save first; the event itself goes off a moment later (in order, never before
+-- an event that is still waiting for its save).
+local function zone_line(text)
+	local save = zone_autosave()
+	if save == "saved" or next(zone_delayed) then
+		local last = zone_delayed[#zone_delayed]
+		local at = time_global() + (save == "saved" and 1500 or 0)
+		table.insert(zone_delayed, { text = text, at = last and math.max(last.at, at) or at, save = save })
+	else
+		zone_event(text, save)
+	end
+end
+
+local function update_zone_delayed()
+	while zone_delayed[1] and time_global() >= zone_delayed[1].at do  -- all whose time has come, in order
+		local first = zone_delayed[1]
+		table.remove(zone_delayed, 1)
+		local ok, err = pcall(zone_event, first.text, first.save)
+		if not ok then
+			log_error("zone " .. first.text .. ": " .. tostring(err))
+			append_event({ type = "zone_done", what = string.match(first.text, "^[^|]*"), ok = false, reason = tostring(err) })
 		end
 	end
 end
@@ -1118,7 +1206,7 @@ inbox_line = function(line)  -- declared above read_inbox
 		local ok, err = pcall(do_action, tonumber(id), text)
 		if not ok then log_error("act " .. text .. ": " .. tostring(err)) end
 	elseif kind == "zone" then
-		local ok, err = pcall(zone_event, text)
+		local ok, err = pcall(zone_line, text)
 		if not ok then
 			log_error("zone " .. text .. ": " .. tostring(err))
 			append_event({ type = "zone_done", what = string.match(text, "^[^|]*"), ok = false, reason = tostring(err) })
@@ -1339,7 +1427,11 @@ function update(delta)
 		if not ok then log_error("link label: " .. tostring(err)); link_shown = nil end
 	end
 	if next(contracts) or next(grudges) then pcall(update_contracts) end
-	if next(zone_pending) then
+	if next(zone_delayed) then
+		local okd, errd = pcall(update_zone_delayed)
+		if not okd then log_error("zone delayed: " .. tostring(errd)) end
+	end
+	if next(zone_pending) or next(zone_friends) then
 		local okz, errz = pcall(update_zone)
 		if not okz then log_error("zone: " .. tostring(errz)) end
 	end
