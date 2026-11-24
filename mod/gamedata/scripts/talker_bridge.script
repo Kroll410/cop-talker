@@ -967,11 +967,15 @@ local zone_delayed = {}     -- events waiting for their autosave to be written: 
 local next_friend_check = 0
 local zone_seeded = false
 
--- "4.1%": whole numbers from 10% up, one decimal below, two under 0.1% (same as zone.py's pct)
+-- "4.1%": whole numbers from 10% up, one decimal from 1%; under 1% two significant digits, so a rare event
+-- reads true and never "0.00%" ("0.25%", "0.00059%"). Same as zone.py's pct.
 local function zone_pct(x)
 	if x >= 9.95 then return string.format("%d%%", math.floor(x + 0.5)) end
-	if x >= 0.095 then return string.format("%.1f%%", x) end
-	return string.format("%.2f%%", x)
+	if x >= 0.995 then return string.format("%.1f%%", x) end
+	if x <= 0 then return "0.00%" end
+	local s = string.format("%." .. (1 - math.floor(math.log10(x))) .. "f", x)
+	s = string.gsub(s, "0+$", "")
+	return (string.gsub(s, "%.$", "")) .. "%"
 end
 
 local function section_ok(sec)

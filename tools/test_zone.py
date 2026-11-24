@@ -39,7 +39,15 @@ try:
     sides = Counter(r["side"] for r in rolls if r["kind"] == "life")
     check(abs(sides["ally"] / sum(sides.values()) - .5) < .02, f"Життя: half friends, half enemies {dict(sides)}")
     children = [r for r in rolls if r["kind"] == "child"]
-    check(all(1 <= r["count"] <= zone.PACK_MAX for r in children), f"Дитя: 1 to {zone.PACK_MAX} mutants (default)")
+    check(all(1 <= r["count"] <= zone.most(r["monster"]) for r in children),
+          f"Дитя: 1 to {zone.PACK_MAX} mutants (default), тушкан up to 10")
+    check(zone.most("тушкан", 3) == 10 and zone.most("сліпий пес", 3) == 3 and zone.most("бюрер") == zone.PACK_MAX,
+          "тушкан has his own most (10), whatever TWITCH_ZONE_PACK_MAX says")
+    tush = Counter(r["count"] for r in (zone.roll("v", "child", random.Random(s)) for s in range(30000))
+                   if r["monster"] == "тушкан")
+    check(max(tush) > 6 and max(tush) <= 10 and abs(sum(zone.count_chance("тушкан", n) for n in range(1, 11)) - 1) < 1e-9
+          and zone.count_chance("тушкан", 11) == 0 and zone.count_chance("сліпий пес", 7) == 0,
+          f"тушкан: packs up to 10 really come ({sorted(tush.items())})")
 
     # pack sizes: mostly one or two, big packs rare, dangerous kinds rarer and smaller (over many rolls)
     def packs(pack_max, n=60000, seed=8):
@@ -51,7 +59,8 @@ try:
         size = Counter(r["count"] for r in got)
         share = {k: v / len(got) for k, v in size.items()}
         small, mid, big = (sum(share.get(c, 0) for c in rng_) for rng_ in (range(1, 3), range(3, 5), range(5, 11)))
-        check(max(size) <= pm, f"max {pm}: never more ({max(size)})")
+        check(all(r["count"] <= (10 if r["monster"] == "тушкан" else pm) for r in got),
+              f"max {pm}: never more (тушкан: 10) ({max(size)})")
         check(small > .75 and mid < .2 and big < .06,
               f"max {pm}: 1-2: {small:.0%}, 3-4: {mid:.0%}, 5+: {big:.1%} (mostly small, big rare)")
         check(all(share.get(c, 0) >= share.get(c + 1, 0) for c in range(1, pm)),
@@ -69,17 +78,65 @@ try:
           f"the chance it carries is the real one (1 tushkan: {one['chance'] / .25:.3f} vs seen {seen:.3f})")
     check("1-2:" in zone.odds_report(6) and "псевдогігант" in zone.odds_report(6), "odds_report lists the odds")
 
+    # the PDA chance of an exact event (kind x pack size x 25% Дитя) is what the real roll gives (tools/zone_sim.py)
+    sys.path.insert(0, str(ROOT / "tools"))
+    import zone_sim  # noqa: E402
+    sim_n = 400000
+    seen, _, shown = zone_sim.simulate(sim_n, 6, seed=5)
+    worst = max(abs(seen[k] / sim_n - zone.chance({"kind": "child", "monster": k[0], "count": k[1]}, 6))
+                / max(zone.chance({"kind": "child", "monster": k[0], "count": k[1]}, 6), 0.002)
+                for k in seen if seen[k] >= 400)
+    check(worst < 0.1 and all(abs(shown[k] - zone.chance({"kind": "child", "monster": k[0], "count": k[1]}, 6)) < 1e-12
+                              for k in shown), f"shown chance = how often the roll gives it (worst off by {worst:.1%})")
+    c = lambda m, n: zone.chance({"kind": "child", "monster": m, "count": n}, 6)  # noqa: E731
+    for rare in ("бюрер", "контролер", "химера", "псевдогігант"):
+        check(c(rare, 1) < c("сліпий пес", 3) and c(rare, 1) * 8 < c("сліпий пес", 1),
+              f"a lone {rare} ({zone.pct(c(rare, 1))}) is rarer than 3 dogs ({zone.pct(c('сліпий пес', 3))}), "
+              f"far rarer than 1 dog ({zone.pct(c('сліпий пес', 1))})")
+    check(all(c(m[0], n + 1) <= c(m[0], n) / 2 for m in zone.MONSTERS for n in range(1, 6)),
+          "every kind: one more mutant halves the chance at least")
+    check(c("сліпий пес", 5) * 20 < c("сліпий пес", 1) and c("сліпий пес", 3) * 4 < c("сліпий пес", 1),
+          f"dogs: 1 {zone.pct(c('сліпий пес', 1))}, 3 {zone.pct(c('сліпий пес', 3))}, 5 {zone.pct(c('сліпий пес', 5))}")
+    check(abs(sum(c(m[0], n) for m in zone.MONSTERS for n in range(1, 11)) - 0.25) < 1e-9,
+          "all mutant outcomes add up to the 25% of Дитя Зони")
+
     # the chance in the PDA line
     check(zone.pct(0.25) == "25%" and zone.pct(0.0412) == "4.1%" and zone.pct(0.0004) == "0.04%"
           and zone.pct(0.0996) == "10%", "percent text: 25%, 4.1%, 0.04%")
+    check([zone.pct(p) for p in (0.0025, 0.00083, 0.00996, 0.0095, 0.009449, 0.0001)] ==
+          ["0.25%", "0.083%", "1.0%", "0.95%", "0.94%", "0.01%"], "under 1%: two significant digits (0.25%, 0.083%)")
+    tiny = {p: zone.pct(p) for p in (0.0000059, 0.00000059, 0.000001, 0.0000999, 0.0000940, 0.0000949)}
+    check(tiny == {0.0000059: "0.00059%", 0.00000059: "0.000059%", 0.000001: "0.0001%", 0.0000999: "0.01%",
+                   0.0000940: "0.0094%", 0.0000949: "0.0095%"} and zone.pct(0) == "0.00%",
+          f"tiny chances keep two significant digits, never 0.00%: {tiny}")
+    three_burers = zone.chance({"kind": "child", "monster": "бюрер", "count": 3})
+    check(zone.pct(three_burers) != "0.00%" and float(zone.pct(three_burers)[:-1]) > 0,
+          f"3 burers: {zone.pct(three_burers)}")
     life = zone.roll("V", "life", random.Random(1))
     check(abs(life["chance"] - 0.25) < 1e-9 and "(шанс 25%)" in zone.command(life)[2], f"life: {zone.command(life)[2]}")
-    kid = dict(zone.roll("V", "child", random.Random(3)), count=4, monster="сліпий пес")
-    kid["chance"] = zone.chance(kid)
-    check(zone.command(kid)[2].endswith("— шанс " + zone.pct(kid["chance"])), f"child: {zone.command(kid)[2]}")
+    # mutants: two rolls (who, then how many), two chances in the PDA line; together they make the exact chance
+    kid = next(k for k in (zone.roll("V", "child", random.Random(s)) for s in range(500))
+               if k["monster"] == "сліпий пес" and k["count"] == 3)
+    text = zone.command(kid)[2]
+    check(abs(zone.who_chance("сліпий пес") - 22 / 100) < 1e-12
+          and abs(kid["count_chance"] - zone.count_chance("сліпий пес", 3)) < 1e-12
+          and abs(.25 * zone.who_chance("сліпий пес") * kid["count_chance"] - kid["chance"]) < 1e-12,
+          f"3 dogs: 25% Дитя x who x how many = the exact chance {kid}")
+    check(text == "Зона народжує... сліпий пес (шанс 22%), кількість 3 (шанс 9.6%) — шанс саме «сліпий пес (3)»: 2.1%",
+          f"child: {text}")
+    check(all(abs(sum(zone.count_chance(m[0], n) for n in range(1, 11)) - 1) < 1e-9 for m in zone.MONSTERS)
+          and abs(sum(zone.who_chance(m[0]) for m in zone.MONSTERS) - 1) < 1e-9,
+          "who: all kinds add up to 100%; how many: its own 100% for each kind")
+    burer = zone.command({"kind": "child", "user": "V", "monster": "бюрер", "sections": ["burer_normal"], "count": 1})[2]
+    check(burer.count("шанс") == 3 and "бюрер (шанс 1.0%)" in burer and "кількість 1 (шанс 95%) — шанс саме «бюрер (1)»: 0.95%" in burer,
+          f"an old queued event (no chances saved) gets them worked out: {burer}")
+    q = zone.ZoneQueue(tmp / "q_label.json", (0, 0), random.Random(1))
+    q.items = [dict(kid, due=0)]
+    check(q.summary(0)[0]["label"] == f"Дитя Зони: сліпий пес ×3 (22%, {zone.pct(kid['count_chance'])})",
+          f"window: both chances {q.summary(0)[0]['label']}")
     check("{chance:25}" in zone.command({"kind": "gift", "user": "V"})[2], "gift: the game divides 25% by its items")
-    check(zone.command({"kind": "child", "user": "V", "monster": "снорк", "sections": ["snork_weak"], "count": 2})[2]
-          .count("шанс") == 1, "an old queued event (no chance saved) gets it worked out")
+    for line in zone.command(kid):
+        line.encode("cp1251")
 
     # ------------------------------------------------------------ the game line
     what, cap, text = zone.command({"kind": "gift", "user": "Vasya"})

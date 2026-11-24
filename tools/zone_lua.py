@@ -2,8 +2,12 @@
 Prints one line per check ("ok   ..." / "FAIL ...") and OK or FAIL at the end."""
 import json
 import sys
+from pathlib import Path
 
 import lupa.luajit21 as lj
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "companion"))
+import zone  # noqa: E402  (its pct must read the same as the game's zone_pct)
 
 script, root = sys.argv[1], sys.argv[2].replace("\\", "/") + "/"
 L = lj.LuaRuntime()
@@ -128,17 +132,24 @@ c, n, ev = take("created"), take("news"), events()
 check(len(c) == 1 and c[0]["parent"] == 0 and c[0]["sec"] in ("medkit", "af_medusa", "wpn_ak74"),
       f"gift: one real item made in the backpack {[dict(x) for x in c]}")
 sec = c[0]["sec"] if c else "?"
-def gift_pct(sec, have=("medkit", "af_medusa", "wpn_ak74")):
+def gift_pct(sec, have=("medkit", "af_medusa", "wpn_ak74"), base=25):
     costs = {"medkit": 250, "af_medusa": 4000, "wpn_ak74": 4000, "vodka": 40, "wpn_addon_silencer": 200}
     w = {s: (100 / max(costs[s], 10)) ** 0.6 * (0.15 if s.startswith("wpn_addon_") else 1) for s in have}
-    x = 25 * w[sec] / sum(w.values())
-    return f"{x:.0f}%" if x >= 9.95 else f"{x:.1f}%" if x >= 0.095 else f"{x:.2f}%"
+    return zone.pct(base * w[sec] / sum(w.values()) / 100)
 
 
 check(n and n[0] == f"Дар Зони (viewer)|Зона бажає милосердя — отримано T(name_{sec}) в рюкзак (шанс {gift_pct(sec)})",
       f"gift: PDA line with the item's name comes first {n}")
 check(any(x.startswith("relocate|in|") for x in n), "gift: the game's 'item received' notice")
 check(ev and ev[0]["type"] == "zone_done" and ev[0]["ok"] and ev[0]["section"] == sec, f"gift: zone_done ok {ev}")
+# a very rare chance still reads as a number, not "0.00%" (two significant digits, same as zone.py)
+inbox("zone||gift|Dar|{item} {chance:0.003}")
+step(300)
+c, n = take("created"), take("news")
+events()
+tiny = gift_pct(c[0]["sec"], base=0.003) if c else "?"
+check(n and n[0].endswith(" " + tiny) and "0.00%" not in n[0] and 0 < float(tiny[:-1]) < 0.01,
+      f"gift: a tiny chance shows its digits ({n[0] if n else n})")
 
 # life: ally, 15-30 m away, follows, wears the nickname, the app hears zone_spawned
 inbox("zone||life:ally:Viewer_1|Життя для Зони (Viewer_1)|Зона грає з життям як заманеться — Viewer_1 тепер іде з тобою")
