@@ -789,7 +789,7 @@ class Window(QMainWindow):
                 self.redeems.set_rewards(json.loads(text))
             except ValueError:
                 pass
-        elif kind == "REWARDS_ERROR":
+        elif kind in ("REWARDS_ERROR", "REDEEM_NOTE"):
             self.redeems.note.setText(text)
         elif kind == "ZONE":
             try:

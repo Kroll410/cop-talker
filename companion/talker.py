@@ -3831,13 +3831,30 @@ class Talker:
         self.game.send("twitch", None, f"{zone.clean_nick(user)}: Зона почула тебе. {soon}")
         self.report_zone(force=True)
 
+    def redeem_blocked(self, user, name, need):
+        """Why a redeem can't go to the game right now (logged, and shown on the window's Redeems tab), or None.
+        need: the game script version it needs."""
+        state = self.game.state()
+        have = (state or {}).get("mod_version") or 0
+        if not state:
+            why = "the game isn't running (or no save is loaded)"
+        elif have < need:
+            why = (f"the game runs an old copy of the mod (v{have}, this needs v{need}): press Reinstall game mod, "
+                   "then reload your save")
+        elif (state.get("actor") or {}).get("health", 1) <= 0:
+            why = "you're dead"
+        else:
+            report("REDEEM_NOTE", f"«{name}» sent to the game")
+            return None
+        log(f"Twitch: {user} redeemed «{name}», but {why}")
+        report("REDEEM_NOTE", f"«{name}» didn't run: {why}")
+        return why
+
     def on_suslov(self, user, redemption=None):
         """«Шари Суслова»: two «Вогняна куля» and a «Ковбаса» laid out on the ground in front of the player, at once
         (no queue, no waiting; the game still autosaves first, like before any Zone event)."""
         nick = zone.clean_nick(user)
-        state = self.game.state() or {}
-        if (state.get("mod_version") or 0) < 14 or (state.get("actor") or {}).get("health", 1) <= 0:
-            log(f"Twitch: {user} redeemed «Шари Суслова», but the game isn't ready (not running, old script or dead)")
+        if self.redeem_blocked(user, f"Шари Суслова", 14):
             return
         log(f"Twitch: {user} redeemed «Шари Суслова»")
         self.zone_fired = {"kind": "suslov", "user": user}
@@ -3849,9 +3866,7 @@ class Talker:
         """«Хуй будеш?»: one pseudogiant turns up near the player, at once (no queue, no waiting; the game still
         autosaves first), hostile and provoked like the Zone's mutants. The men around panic about it."""
         nick = zone.clean_nick(user)
-        state = self.game.state() or {}
-        if (state.get("mod_version") or 0) < 15 or (state.get("actor") or {}).get("health", 1) <= 0:
-            log(f"Twitch: {user} redeemed «{self.GIANT_NAME}», but the game isn't ready (not running, old script or dead)")
+        if self.redeem_blocked(user, f"{self.GIANT_NAME}", 15):
             return
         log(f"Twitch: {user} redeemed «{self.GIANT_NAME}»")
         self.zone_fired = {"kind": "giant", "user": user, "monster": "псевдогігант"}
@@ -3865,9 +3880,7 @@ class Talker:
         fires 100x as fast and does 1000x less damage («Свистілка Вови Віста»). Neutral to the player, he opens fire
         on everyone else around. Needs script version 15 and the gun's section (install_mod.ps1)."""
         nick = zone.clean_nick(user)
-        state = self.game.state() or {}
-        if (state.get("mod_version") or 0) < 15 or (state.get("actor") or {}).get("health", 1) <= 0:
-            log(f"Twitch: {user} redeemed «{self.VOVA_NAME}», but the game isn't ready (not running, old script or dead)")
+        if self.redeem_blocked(user, f"{self.VOVA_NAME}", 15):
             return
         log(f"Twitch: {user} redeemed «{self.VOVA_NAME}»")
         self.zone_fired = {"kind": "vova", "user": user}
@@ -3877,9 +3890,7 @@ class Talker:
         """«Анекдот»: a «Хліб», a «Ковбаса» and a handful of bolts dropped on the ground in front of the player, at once
         (no queue). They roll and can be kicked, but nobody can keep them: picked up, they go back. Needs script v15."""
         nick = zone.clean_nick(user)
-        state = self.game.state() or {}
-        if (state.get("mod_version") or 0) < 15 or (state.get("actor") or {}).get("health", 1) <= 0:
-            log(f"Twitch: {user} redeemed «Анекдот», but the game isn't ready (not running, old script or dead)")
+        if self.redeem_blocked(user, f"Анекдот", 15):
             return
         log(f"Twitch: {user} redeemed «Анекдот»")
         self.zone_fired = {"kind": "anekdot", "user": user}
@@ -3892,9 +3903,7 @@ class Talker:
         once from all round the player, each copy from its own spot, at its own volume, pitch, speed and delay, so they
         overlap and echo. At once, no queue, and no autosave (it's only a sound). Needs script version 15."""
         nick = zone.clean_nick(user)
-        state = self.game.state() or {}
-        if (state.get("mod_version") or 0) < 15 or (state.get("actor") or {}).get("health", 1) <= 0:
-            log(f"Twitch: {user} redeemed «{self.SIXTY_TWO_NAME}», but the game isn't ready (not running, old script or dead)")
+        if self.redeem_blocked(user, f"{self.SIXTY_TWO_NAME}", 15):
             return
         log(f"Twitch: {user} redeemed «{self.SIXTY_TWO_NAME}»")
         self.zone_fired = {"kind": "62", "user": user}
@@ -3906,9 +3915,7 @@ class Talker:
         and nothing else to shoot with. side: enemy, neutral or ally. The viewer's nickname goes on the label over his
         head and the viewer speaks through him, like a Zone friend's. text: the PDA line under his name."""
         nick = zone.clean_nick(user)
-        state = self.game.state() or {}
-        if (state.get("mod_version") or 0) < 15 or (state.get("actor") or {}).get("health", 1) <= 0:
-            log(f"Twitch: {user} redeemed «{name}», but the game isn't ready (not running, old script or dead)")
+        if self.redeem_blocked(user, f"{name}", 15):
             return False
         log(f"Twitch: {user} redeemed «{name}»")
         self.zone_fired = {"kind": kind, "user": user}
