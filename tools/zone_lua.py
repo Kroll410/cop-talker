@@ -608,10 +608,11 @@ check(ev and ev[0]["ok"] and [x["sec"] for x in c][:1] == ["talker_vova_soldier"
 L.execute("HAVE.talker_vova_soldier = false")
 take("news")
 
-# «62»: the streamer's clip SIXTY_TWO_COUNT times at once, no autosave, each copy 3D at its own spot around the player
-# (one per slice of the circle, NEAR-FAR m), its own volume, pitch and delay; kept referenced until done, then let go
-L.execute("""played, SOUNDS = {}, { ["talker\\\\sixty_two.ogg"] = true, ["talker\\\\sixty_two_slow.ogg"] = true,
-  ["talker\\\\sixty_two_fast.ogg"] = true }
+# Clip rewards («62», «Чики-брики»; CLIPS): the streamer's clip CLIP_COUNT times at once, no autosave, each copy 3D at
+# its own spot around the player (one per slice of the circle, NEAR-FAR m), its own volume, pitch and delay; kept
+# referenced until done, then let go. One code path (play_clip), the clip picked by the Zone event's what.
+L.execute("""played, SOUNDS = {}, {}
+for _, sounds in pairs(CLIPS) do for _, v in ipairs(sounds) do SOUNDS[v[1] .. ".ogg"] = true end end
 function getFS() return { update_path = function() return ROOT .. "talker/" end,
   exist = function(_, root, name) return root == "$game_sounds$" and SOUNDS[name] or nil end } end
 sound_object = setmetatable({ s3d = 0, looped = 1, s2d = 2 }, { __call = function(_, name)
@@ -624,46 +625,86 @@ sound_object = setmetatable({ s3d = 0, looped = 1, s2d = 2 }, { __call = functio
 TUTORIAL = false""")
 step(11000)
 take("saves"); take("created"); take("news"); events()
-inbox("zone||62|62|viewer передає: шиісят два! Звідусіль")
+count, near, far = L.eval("CLIP_COUNT"), L.eval("CLIP_NEAR"), L.eval("CLIP_FAR")
+(vlo, vhi), (plo, phi), (dlo, dhi) = (list(L.eval(k).values()) for k in ("CLIP_VOLUME", "CLIP_PITCH", "CLIP_DELAY"))
+check(sorted(L.eval("CLIPS").keys()) == ["62", "chiki", "mochi"],
+      f"clips: «62», «Чики-брики» and «Мочии» {list(L.eval('CLIPS').keys())}")
+check(L.eval('ZONE_NO_SAVE["62"] and ZONE_NO_SAVE.chiki and ZONE_NO_SAVE.mochi'), "every clip reward skips the autosave")
+for what, name, base in (("62", "62", "sixty_two"), ("chiki", "Чики-брики", "chiki_briki")):
+    L.execute("played = {}")
+    inbox(f"zone||{what}|{name}|viewer передає: звідусіль")
+    step(300)
+    n, ev, saves = take("news"), events(), take("saves")
+    p = [dict(x) for x in L.eval("played").values()]
+    for x in p:
+        s = x.pop("s")
+        x.update(name=s.name, volume=s.volume, pitch=s.frequency, lo=s.min_distance, hi=s.max_distance)
+    check(count == 10 and len(p) == 10, f"{what}: 10 copies played at once ({len(p)})")
+    check(all(x["flags"] == 0 and x["obj"] == 0 for x in p), f"{what}: 3D (s3d), from the player's side")
+    kinds = Counter(x["name"] for x in p)
+    check(set(kinds) == {f"talker\\{base}", f"talker\\{base}_slow", f"talker\\{base}_fast"}
+          and max(kinds.values()) - min(kinds.values()) <= 1,
+          f"{what}: its own clip as recorded, slowed down and sped up, shared out evenly {dict(kinds)}")
+    check(not saves and ev and ev[0].get("autosave") == "not needed", f"{what}: no autosave first, played straight away {saves} {ev}")
+    vols, pitches, delays = [x["volume"] for x in p], [x["pitch"] for x in p], [x["delay"] for x in p]
+    check(len(set(vols)) == 10 and all(vlo <= v <= vhi for v in vols), f"{what}: each its own volume {[round(v, 2) for v in vols]}")
+    check(len(set(pitches)) == 10 and all(plo <= v <= phi for v in pitches) and min(pitches) < 1 < max(pitches),
+          f"{what}: each its own pitch, low to high {[round(v, 2) for v in pitches]}")
+    check(len(set(delays)) == 10 and all(dlo <= v <= dhi for v in delays) and max(delays) - min(delays) > 1,
+          f"{what}: each its own start delay (seconds) {[round(v, 2) for v in delays]}")
+    check(all(x["lo"] == 5 and x["hi"] == 60 for x in p), f"{what}: hearing range set after play (play resets it)")
+    dist = [math.hypot(x["x"], x["z"]) for x in p]
+    check(all(near - 1e-6 <= d <= far + 1e-6 for d in dist), f"{what}: {near}-{far} m from the player {[round(d, 1) for d in dist]}")
+    slices = {int((math.atan2(x["z"], x["x"]) % (2 * math.pi)) / (2 * math.pi) * 10) for x in p}
+    check(len(slices) == 10 and len({(round(x["x"], 3), round(x["z"], 3)) for x in p}) == 10,
+          f"{what}: all round the player, one per slice of the circle {sorted(slices)}")
+    check(all(x["y"] > 0 for x in p), f"{what}: above the ground")
+    check(ev and ev[0]["ok"] and ev[0]["what"] == what and ev[0]["count"] == 10 and ev[0].get("section") == base,
+          f"{what}: zone_done {ev}")
+    check(n and n[0].startswith(f"{name}|viewer передає"), f"{what}: PDA line {n}")
+    check(not take("created"), f"{what}: nothing spawned")
+    check(L.eval("#clip_sounds") == 10, f"{what}: all 10 kept referenced while they play (no GC cut-off)")
+    longest = max(v[2] for v in L.eval(f'CLIPS["{what}"]').values())
+    step(int((dhi + longest / plo) * 1000) + 2500)
+    check(L.eval("#clip_sounds") == 0, f"{what}: let go once they've all finished")
+L.execute('SOUNDS["talker\\\\chiki_briki_fast.ogg"] = nil; played = {}')
+inbox("zone||chiki|Чики-брики|t")
 step(300)
-n, ev, saves = take("news"), events(), take("saves")
-p = [dict(x) for x in L.eval("played").values()]
-for x in p:
-    s = x.pop("s")
-    x.update(name=s.name, volume=s.volume, pitch=s.frequency, lo=s.min_distance, hi=s.max_distance)
-count, near, far = L.eval("SIXTY_TWO_COUNT"), L.eval("SIXTY_TWO_NEAR"), L.eval("SIXTY_TWO_FAR")
-(vlo, vhi), (plo, phi), (dlo, dhi) = (list(L.eval(k).values()) for k in ("SIXTY_TWO_VOLUME", "SIXTY_TWO_PITCH", "SIXTY_TWO_DELAY"))
-check(count == 10 and len(p) == 10, f"62: 10 copies played at once ({len(p)})")
-check(all(x["flags"] == 0 and x["obj"] == 0 for x in p), "62: 3D (s3d), from the player's side")
-kinds = Counter(x["name"] for x in p)
-check(set(kinds) == {"talker\\sixty_two", "talker\\sixty_two_slow", "talker\\sixty_two_fast"}
-      and max(kinds.values()) - min(kinds.values()) <= 1, f"62: as recorded, slowed down and sped up, shared out evenly {dict(kinds)}")
-check(not saves and ev and ev[0].get("autosave") == "not needed", f"62: no autosave first, played straight away {saves} {ev}")
-vols, pitches, delays = [x["volume"] for x in p], [x["pitch"] for x in p], [x["delay"] for x in p]
-check(len(set(vols)) == 10 and all(vlo <= v <= vhi for v in vols), f"62: each its own volume {[round(v, 2) for v in vols]}")
-check(len(set(pitches)) == 10 and all(plo <= v <= phi for v in pitches) and min(pitches) < 1 < max(pitches),
-      f"62: each its own pitch, low to high {[round(v, 2) for v in pitches]}")
-check(len(set(delays)) == 10 and all(dlo <= v <= dhi for v in delays) and max(delays) - min(delays) > 1,
-      f"62: each its own start delay (seconds) {[round(v, 2) for v in delays]}")
-check(all(x["lo"] == 5 and x["hi"] == 60 for x in p), "62: hearing range set after play (play resets it)")
-dist = [math.hypot(x["x"], x["z"]) for x in p]
-check(all(near - 1e-6 <= d <= far + 1e-6 for d in dist), f"62: {near}-{far} m from the player {[round(d, 1) for d in dist]}")
-slices = {int((math.atan2(x["z"], x["x"]) % (2 * math.pi)) / (2 * math.pi) * 10) for x in p}
-check(len(slices) == 10 and len({(round(x["x"], 3), round(x["z"], 3)) for x in p}) == 10,
-      f"62: all round the player, one per slice of the circle {sorted(slices)}")
-check(all(x["y"] > 0 for x in p), "62: above the ground")
-check(ev and ev[0]["ok"] and ev[0]["what"] == "62" and ev[0]["count"] == 10, f"62: zone_done {ev}")
-check(n and n[0].startswith("62|viewer передає"), f"62: PDA line {n}")
-check(not take("created"), "62: nothing spawned")
-check(L.eval("#sixty_two_sounds") == 10, "62: all 10 kept referenced while they play (no GC cut-off)")
-longest = max(v[2] for v in L.eval("SIXTY_TWO_SOUNDS").values())
-step(int((dhi + longest / plo) * 1000) + 2500)
-check(L.eval("#sixty_two_sounds") == 0, "62: let go once they've all finished")
-L.execute('SOUNDS["talker\\\\sixty_two_fast.ogg"] = nil; played = {}')
+ev = events()
+check(not list(L.eval("played").values()) and ev and not ev[0]["ok"] and "install_mod" in ev[0]["reason"]
+      and "chiki_briki_fast" in ev[0]["reason"], f"chiki: the clip isn't installed: nothing played, a clear reason {ev}")
+take("news")
+L.execute("played = {}")
 inbox("zone||62|62|t")
 step(300)
 ev = events()
-check(not list(L.eval("played").values()) and ev and not ev[0]["ok"] and "install_mod" in ev[0]["reason"],
-      f"62: the clip isn't installed: nothing played, a clear reason {ev}")
+check(len(list(L.eval("played").values())) == 10 and ev and ev[0]["ok"], f"62 still plays without the other clip {ev}")
+take("news")
+
+# «Мочии»: the same path with the game's own zombie voice (base_sounds.db, no file of ours) in one version; the copies
+# differ by pitch alone (a lower one is also slower).
+MOCHI = "characters_voice\\human_01\\zombied\\fight\\attack\\script_attack_5"
+L.execute("played = {}")
+inbox("zone||mochi|Мочии|viewer передає: мочи")
+step(300)
+n, ev, saves = take("news"), events(), take("saves")
+p = [dict(x) for x in L.eval("played").values()]
+names = {x["s"].name for x in p}
+pitches = [x["s"].frequency for x in p]
+check(len(p) == 10 and names == {MOCHI}, f"mochi: 10 copies of the game's own sound {names}")
+check(all(x["flags"] == 0 for x in p) and len(set(pitches)) == 10 and min(pitches) < 1 < max(pitches),
+      f"mochi: 3D, each its own pitch {[round(v, 2) for v in pitches]}")
+check(not saves and ev and ev[0]["ok"] and ev[0]["what"] == "mochi" and ev[0].get("section") == "script_attack_5"
+      and ev[0].get("autosave") == "not needed", f"mochi: zone_done, no autosave {ev}")
+check(n and n[0].startswith("Мочии|viewer передає"), f"mochi: PDA line {n}")
+longest = max(v[2] for c in L.eval("CLIPS").values() for v in c.values())  # «62» just above may still be playing
+step(int((dhi + longest / plo) * 1000) + 2500)
+check(L.eval("#clip_sounds") == 0, "mochi: let go once they've all finished")
+L.execute(f'SOUNDS["{MOCHI.replace(chr(92), chr(92) * 2)}.ogg"] = nil; played = {{}}')
+inbox("zone||mochi|Мочии|t")
+step(300)
+ev = events()
+check(not list(L.eval("played").values()) and ev and not ev[0]["ok"] and "script_attack_5 in the game" in ev[0]["reason"]
+      and "install_mod" not in ev[0]["reason"], f"mochi: the game lacks the sound: nothing played, no install_mod hint {ev}")
 take("news")
 print("OK" if ok else "FAIL")

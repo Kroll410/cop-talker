@@ -1059,20 +1059,27 @@ GIANT_SECTIONS, GIANT_NEAR, GIANT_FAR = { "gigant_normal", "gigant_strong", "gig
 -- each side), ANEKDOT_BOLTS bolts scattered all round that spot, ANEKDOT_SPREAD[1] to [2] metres from it.
 ANEKDOT_AHEAD, ANEKDOT_SIDE, ANEKDOT_BOLTS, ANEKDOT_SPREAD = 1.8, 0.15, 12, { 0.4, 1.0 }
 
--- «62» (Twitch reward): the streamer's clip (gamedata\sounds\talker\sixty_two*.ogg, mono for 3D) played SIXTY_TWO_COUNT
--- times at once, every copy from its own spot around the player (in its own slice of the circle, SIXTY_TWO_NEAR to
--- _FAR metres away, SIXTY_TWO_HEIGHT[1] to [2] metres up), at its own volume (SIXTY_TWO_VOLUME, 1 = full), pitch
--- (SIXTY_TWO_PITCH: 1 = as recorded; the engine plays a lower one deeper and slower too) and start delay
--- (SIXTY_TWO_DELAY, seconds), so they overlap and echo all round. Each copy is heard at full volume within
--- SIXTY_TWO_RANGE[1] metres, fading out by [2]. SIXTY_TWO_SOUNDS: the clip as recorded, slowed down (x0.65) and sped
--- up (x1.6) at the same pitch, with each one's length in seconds; the copies are shared out among them, mixed up.
-SIXTY_TWO_SOUNDS = { { "talker\\sixty_two", 3.09 }, { "talker\\sixty_two_slow", 4.75 }, { "talker\\sixty_two_fast", 1.93 } }
-SIXTY_TWO_COUNT = 10
-SIXTY_TWO_NEAR, SIXTY_TWO_FAR, SIXTY_TWO_HEIGHT = 3, 15, { 0.5, 3 }
-SIXTY_TWO_VOLUME, SIXTY_TWO_PITCH, SIXTY_TWO_DELAY = { 0.35, 1.0 }, { 0.7, 1.5 }, { 0, 2.5 }
-SIXTY_TWO_RANGE = { 5, 60 }
-ZONE_NO_SAVE = { ["62"] = true }  -- Zone events with no autosave first: only a sound, nothing worth saving for
-sixty_two_sounds = {}  -- copies not done yet: a sound_object Lua lets go of is stopped by the garbage collector
+-- Clip rewards («62», «Чики-брики», «Мочии»; Twitch): a clip (gamedata\sounds\..., mono for 3D) played
+-- CLIP_COUNT times at once, every copy from its own spot around the player (in its own slice of the circle, CLIP_NEAR
+-- to _FAR metres away, CLIP_HEIGHT[1] to [2] metres up), at its own volume (CLIP_VOLUME, 1 = full), pitch (CLIP_PITCH:
+-- 1 = as recorded; the engine plays a lower one deeper and slower too) and start delay (CLIP_DELAY, seconds), so they
+-- overlap and echo all round. Each copy is heard at full volume within CLIP_RANGE[1] metres, fading out by [2].
+-- CLIPS: for each Zone event (what) its clip as recorded, slowed down (x0.65) and sped up (x1.6) at the same pitch,
+-- with each one's length in seconds; the copies are shared out among them, mixed up. A new clip reward is one line.
+CLIPS = {
+	["62"] = { { "talker\\sixty_two", 3.09 }, { "talker\\sixty_two_slow", 4.75 }, { "talker\\sixty_two_fast", 1.93 } },
+	chiki = { { "talker\\chiki_briki", 2.77 }, { "talker\\chiki_briki_slow", 4.22 }, { "talker\\chiki_briki_fast", 1.73 } },
+	-- «Мочии»: the game's own zombie shout «Мочи...» (in every copy's base_sounds.db, mono): no file shipped, one
+	-- version only; CLIP_PITCH alone makes the copies deeper and slower or higher and faster.
+	mochi = { { "characters_voice\\human_01\\zombied\\fight\\attack\\script_attack_5", 2.11 } },
+}
+CLIP_COUNT = 10
+CLIP_NEAR, CLIP_FAR, CLIP_HEIGHT = 3, 15, { 0.5, 3 }
+CLIP_VOLUME, CLIP_PITCH, CLIP_DELAY = { 0.35, 1.0 }, { 0.7, 1.5 }, { 0, 2.5 }
+CLIP_RANGE = { 5, 60 }
+ZONE_NO_SAVE = {}  -- Zone events with no autosave first: only a sound, nothing worth saving for
+for what in pairs(CLIPS) do ZONE_NO_SAVE[what] = true end
+clip_sounds = {}  -- copies not done yet: a sound_object Lua lets go of is stopped by the garbage collector
 
 local function shuffle(list)
 	for i = #list, 2, -1 do local j = math.random(i); list[i], list[j] = list[j], list[i] end
@@ -1086,38 +1093,41 @@ local function spread(n, lo, hi)
 	return shuffle(list)
 end
 
--- «62»: starts every copy (each waits out its own delay in the engine). Returns how many, or nil and why not.
-local function sixty_two()
-	for _, v in ipairs(SIXTY_TWO_SOUNDS) do
+-- A clip reward: starts every copy of the clip (sounds: its CLIPS entry; each copy waits out its own delay in the
+-- engine). Returns how many, or nil and why not.
+local function play_clip(sounds)
+	for _, v in ipairs(sounds) do
 		local okf, file = pcall(function() return getFS():exist("$game_sounds$", v[1] .. ".ogg") end)
-		if okf and not file then return nil, "no sound " .. v[1] .. " (run install_mod.ps1)" end
+		if okf and not file then  -- ours: not installed; the game's own (no "talker\"): this copy of the game lacks it
+			return nil, "no sound " .. v[1] .. (string.find(v[1], "^talker\\") and " (run install_mod.ps1)" or " in the game")
+		end
 	end
-	local n = SIXTY_TWO_COUNT
+	local n = CLIP_COUNT
 	local kinds = {}  -- which version each copy plays: all of them about equally often, in random order
-	for i = 1, n do kinds[i] = SIXTY_TWO_SOUNDS[(i - 1) % #SIXTY_TWO_SOUNDS + 1] end
+	for i = 1, n do kinds[i] = sounds[(i - 1) % #sounds + 1] end
 	shuffle(kinds)
-	local vols = spread(n, SIXTY_TWO_VOLUME[1], SIXTY_TWO_VOLUME[2])
-	local pitches = spread(n, SIXTY_TWO_PITCH[1], SIXTY_TWO_PITCH[2])
-	local delays = spread(n, SIXTY_TWO_DELAY[1], SIXTY_TWO_DELAY[2])
+	local vols = spread(n, CLIP_VOLUME[1], CLIP_VOLUME[2])
+	local pitches = spread(n, CLIP_PITCH[1], CLIP_PITCH[2])
+	local delays = spread(n, CLIP_DELAY[1], CLIP_DELAY[2])
 	local apos, now = db.actor:position(), time_global()
 	for i = 1, n do
 		local a = (i - 1 + math.random()) * 2 * math.pi / n
-		local r = SIXTY_TWO_NEAR + math.random() * (SIXTY_TWO_FAR - SIXTY_TWO_NEAR)
-		local h = SIXTY_TWO_HEIGHT[1] + math.random() * (SIXTY_TWO_HEIGHT[2] - SIXTY_TWO_HEIGHT[1])
+		local r = CLIP_NEAR + math.random() * (CLIP_FAR - CLIP_NEAR)
+		local h = CLIP_HEIGHT[1] + math.random() * (CLIP_HEIGHT[2] - CLIP_HEIGHT[1])
 		local snd = sound_object(kinds[i][1])
 		snd:play_at_pos(db.actor, vector():set(apos.x + r * math.cos(a), apos.y + h, apos.z + r * math.sin(a)),
 			delays[i], sound_object.s3d)
 		-- set after play: starting a sound resets its volume, pitch and range
 		snd.volume, snd.frequency = vols[i], pitches[i]
-		snd.min_distance, snd.max_distance = SIXTY_TWO_RANGE[1], SIXTY_TWO_RANGE[2]
-		table.insert(sixty_two_sounds, { snd = snd, till = now + (delays[i] + kinds[i][2] / pitches[i]) * 1000 + 2000 })
+		snd.min_distance, snd.max_distance = CLIP_RANGE[1], CLIP_RANGE[2]
+		table.insert(clip_sounds, { snd = snd, till = now + (delays[i] + kinds[i][2] / pitches[i]) * 1000 + 2000 })
 	end
 	return n
 end
 
-local function update_sixty_two(now)  -- let go of the copies that have finished
-	for i = #sixty_two_sounds, 1, -1 do
-		if now > sixty_two_sounds[i].till then table.remove(sixty_two_sounds, i) end
+local function update_clips(now)  -- let go of the copies that have finished
+	for i = #clip_sounds, 1, -1 do
+		if now > clip_sounds[i].till then table.remove(clip_sounds, i) end
 	end
 end
 
@@ -1524,11 +1534,11 @@ local function zone_event(text, save)
 		done.ok, done.section, done.count = true, sec, 1
 		return append_event(done)
 	end
-	if what == "62" then  -- «62»: the streamer's clip shouted 10 times from all round, overlapping (sixty_two)
-		local count, why = sixty_two()
+	if CLIPS[what] then  -- «62», «Чики-брики», «Мочии»: the clip shouted 10 times from all round, overlapping (play_clip)
+		local count, why = play_clip(CLIPS[what])
 		if not count then done.reason = why; return append_event(done) end
 		say()
-		done.ok, done.section, done.count = true, "sixty_two", count
+		done.ok, done.section, done.count = true, string.match(CLIPS[what][1][1], "[^\\]+$"), count
 		return append_event(done)
 	end
 	done.reason = "unknown"
@@ -1947,7 +1957,7 @@ function update(delta)
 		local okv, errv = pcall(update_vovas)
 		if not okv then log_error("vova: " .. tostring(errv)) end
 	end
-	if next(sixty_two_sounds) then update_sixty_two(now) end
+	if next(clip_sounds) then update_clips(now) end
 	if next(props) and now >= next_props_check then
 		next_props_check = now + 1000
 		local okp, errp = pcall(update_props)

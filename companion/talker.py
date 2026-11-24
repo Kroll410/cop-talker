@@ -256,6 +256,7 @@ TWITCH_VOVA_REWARD = os.environ.get("TWITCH_VOVA_REWARD", "").strip()  # «Во�
 TWITCH_ANEKDOT_REWARD = os.environ.get("TWITCH_ANEKDOT_REWARD", "").strip()  # «Анекдот» reward title; empty = off
 TWITCH_GOSHA_REWARD = os.environ.get("TWITCH_GOSHA_REWARD", "").strip()  # «Гоша» reward title; empty = off
 TWITCH_62_REWARD = os.environ.get("TWITCH_62_REWARD", "").strip()  # «62» reward title; empty = off
+TWITCH_CHIKI_REWARD = os.environ.get("TWITCH_CHIKI_REWARD", "").strip()  # «Чики-брики» reward title; empty = off
 TWITCH_ZONE_GAP = os.environ.get("TWITCH_ZONE_GAP", "5-7")  # minutes between two Zone events; 0 = at once
 
 LEVELS = {"zaton": "Затон", "jupiter": "Юпітер", "pripyat": "Прип'ять",
@@ -3897,17 +3898,33 @@ class Talker:
         self.game.send("zone", None, f"anekdot|Анекдот|{nick} розповідає анекдот. Хліб, ковбаса і болти, під ногами")
 
     SIXTY_TWO_NAME = "62"  # the reward's title, and the PDA caption
+    CHIKI_NAME = "Чики-брики"
+    MOCHI_NAME = "Мочии"
+
+    def send_clip(self, user, kind, name, text):
+        """A clip reward («62», «Чики-брики»): the game shouts the streamer's clip for this kind (CLIPS in
+        talker_bridge.script, gamedata\\sounds\\talker\\*.ogg) 10 times at once from all round the player, each copy
+        from its own spot, at its own volume, pitch, speed and delay, so they overlap and echo. At once, no queue, and
+        no autosave (it's only a sound). Needs script version 15. text: the PDA line after the viewer's nickname."""
+        nick = zone.clean_nick(user)
+        if self.redeem_blocked(user, f"{name}", 15):
+            return
+        log(f"Twitch: {user} redeemed «{name}»")
+        self.zone_fired = {"kind": kind, "user": user}
+        self.game.send("zone", None, f"{kind}|{name}|{nick} {text}")
 
     def on_sixty_two(self, user, redemption=None):
-        """«62»: the streamer's own clip «шиісят два» (gamedata\\sounds\\talker\\sixty_two*.ogg) is shouted 10 times at
-        once from all round the player, each copy from its own spot, at its own volume, pitch, speed and delay, so they
-        overlap and echo. At once, no queue, and no autosave (it's only a sound). Needs script version 15."""
-        nick = zone.clean_nick(user)
-        if self.redeem_blocked(user, f"{self.SIXTY_TWO_NAME}", 15):
-            return
-        log(f"Twitch: {user} redeemed «{self.SIXTY_TWO_NAME}»")
-        self.zone_fired = {"kind": "62", "user": user}
-        self.game.send("zone", None, f"62|{self.SIXTY_TWO_NAME}|{nick} передає: шиісят два! Звідусіль")
+        """«62»: «шиісят два» (sixty_two*.ogg), shouted from all round (send_clip)."""
+        self.send_clip(user, "62", self.SIXTY_TWO_NAME, "передає: шиісят два! Звідусіль")
+
+    def on_chiki(self, user, redemption=None):
+        """«Чики-брики»: «а ну чики-брики» (chiki_briki*.ogg), shouted from all round (send_clip)."""
+        self.send_clip(user, "chiki", self.CHIKI_NAME, "передає: а ну чики-брики! Звідусіль")
+
+    def on_mochi(self, user, redemption=None):
+        """«Мочии»: a zombified stalker's «Мочи...» (the game's own sound, no file of ours), shouted from all round
+        (send_clip)."""
+        self.send_clip(user, "mochi", self.MOCHI_NAME, "передає: мочи-и-и... Зомбі звідусіль")
 
     def send_named(self, user, kind, name, community, weapon, side, text):
         """A named man of a faction turns up near the player, at once (no queue; the game still autosaves first):
@@ -4009,6 +4026,20 @@ class Talker:
                     "there is nobody there. React confused and freaked out: what the hell is that, who is shouting, "
                     "why sixty-two, is it the Zone, a controller (контролер) in your head, too much vodka? Swear, joke "
                     "nervously, or ask the others if they hear it too.")
+        if kind == "chiki":
+            return ("Out of nowhere a man's voice just started shouting «а ну чики-брики» (the old stalker bandit's "
+                    "'come on, chop-chop, hop to it', the kind a гопник shouts before a scrap) from every side at "
+                    "once, over and over, near and far, high and low, echoing all round you, and there is nobody "
+                    "there. React confused and freaked out: who is shouting, are bandits (бандити) about to jump us, "
+                    "is it the Zone, a controller (контролер) in your head? Grab your gun, swear, joke nervously, or "
+                    "ask the others if they hear it too.")
+        if kind == "mochi":
+            return ("Out of nowhere the hoarse, dead voice of a zombie (зомбований сталкер, a stalker the Brain Scorcher "
+                    "burned out) just started groaning «Мочи...» ('kill...') from every side at once, over and over, "
+                    "near and far, deep and high, echoing all round you, and there is nobody there. React confused "
+                    "and freaked out: are we surrounded by zombies, where are they, is it the Zone or a controller "
+                    "(контролер) in your head? Grab your gun and look round, swear, pray, joke nervously, or ask the "
+                    "others if they hear it too.")
         if kind == "gosha":
             return (f"Out of thin air a man just appeared nearby: «{(spawned or {}).get('name') or 'Гоша'}», one of the "
                     "найманці (mercenaries), with a shotgun, and he is coming to kill the player. A viewer sent him. "

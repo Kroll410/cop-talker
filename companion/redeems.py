@@ -45,6 +45,10 @@ REDEEMS = [
            "A Mercenary named «Гоша» with a SPAS-12 comes for you from 15-30 m.", "on_gosha"),
     Redeem("62", "TWITCH_62_REWARD", "62",
            "«шиісят два», shouted 10 times from all round you.", "on_sixty_two"),
+    Redeem("chiki", "TWITCH_CHIKI_REWARD", "Чики-брики",
+           "«а ну чики-брики», shouted 10 times from all round you.", "on_chiki"),
+    Redeem("mochi", "TWITCH_MOCHI_REWARD", "Мочии",
+           "A zombie's «Мочи...», groaned 10 times from all round you.", "on_mochi"),
 ]
 
 TRIGGERS = [r for r in REDEEMS if r.kind == "trigger"]
