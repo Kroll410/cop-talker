@@ -250,6 +250,7 @@ TWITCH_BLOCKED = [w.strip().lower() for w in os.environ.get("TWITCH_BLOCKED", ""
 # Zone events: the title of a channel-points reward you made on Twitch (no message). Empty = off.
 TWITCH_ZONE_REWARD = os.environ.get("TWITCH_ZONE_REWARD", "").strip()
 TWITCH_ZONE_PACK_MAX = int(os.environ.get("TWITCH_ZONE_PACK_MAX", "6") or 6)  # most mutants one event brings
+TWITCH_SUSLOV_REWARD = os.environ.get("TWITCH_SUSLOV_REWARD", "").strip()  # «Шари Суслова» reward title; empty = off
 TWITCH_ZONE_GAP = os.environ.get("TWITCH_ZONE_GAP", "5-7")  # minutes between two Zone events; 0 = at once
 
 LEVELS = {"zaton": "Затон", "jupiter": "Юпітер", "pripyat": "Прип'ять",
@@ -2905,7 +2906,8 @@ class Talker:
             self.twitch = Twitch(TWITCH_CLIENT_ID, TWITCH_REWARD, ROOT / "twitch_token.json", self.on_twitch, log,
                                  on_code=lambda url, code: report("TWITCH_CODE", f"{url}|{code}"),
                                  source=TWITCH_SOURCE, channel=TWITCH_CHANNEL,
-                                 zone_title=TWITCH_ZONE_REWARD, on_zone=self.on_zone)
+                                 zone_title=TWITCH_ZONE_REWARD, on_zone=self.on_zone,
+                                 triggers={TWITCH_SUSLOV_REWARD: self.on_suslov} if TWITCH_SUSLOV_REWARD else None)
             self.twitch.start()
 
     def show_line(self, npc_id, text, pda_text=None):
@@ -3822,6 +3824,18 @@ class Talker:
         self.game.send("twitch", None, f"{zone.clean_nick(user)}: Зона почула тебе. {soon}")
         self.report_zone(force=True)
 
+    def on_suslov(self, user, redemption=None):
+        """«Шари Суслова»: two «Вогняна куля» and a «Ковбаса» laid out on the ground in front of the player, at once
+        (no queue, no waiting; the game still autosaves first, like before any Zone event)."""
+        nick = zone.clean_nick(user)
+        state = self.game.state() or {}
+        if (state.get("mod_version") or 0) < 14 or (state.get("actor") or {}).get("health", 1) <= 0:
+            log(f"Twitch: {user} redeemed «Шари Суслова», but the game isn't ready (not running, old script or dead)")
+            return
+        log(f"Twitch: {user} redeemed «Шари Суслова»")
+        self.zone_fired = {"kind": "suslov", "user": user}
+        self.game.send("zone", None, f"suslov|Шари Суслова|{nick} шле привіт від Суслова. Під ногами, глянь")
+
     def zone_test(self, kind=None):
         """The window's test button: a Zone event at once, without a redemption."""
         who = (self.twitch.login if self.twitch and self.twitch.login else None) or "test"
@@ -3859,7 +3873,7 @@ class Talker:
                                                          f", no autosave: {ev['autosave']}" if ev.get("autosave") else "")
                 if ev.get("ok"):
                     log(f"  Zone: done ({ev.get('section')}{' x' + str(ev['count']) if ev.get('count') else ''}{saved})")
-                elif item and self.zone.retry(item, time.time()):
+                elif item and item.get("kind") != "suslov" and self.zone.retry(item, time.time()):
                     log(f"  Zone: the game couldn't do it ({ev.get('reason')}), trying again in 30 s")
                 else:
                     log(f"  Zone: the game couldn't do it ({ev.get('reason')}), given up")
@@ -3885,6 +3899,10 @@ class Talker:
             name = clean_game_text(ev.get("name") or "") or "something"
             return (f"Out of thin air an item ({name}) just landed in the player's backpack: a gift of the Zone. "
                     "React: surprise, envy, a superstition or a joke.")
+        if kind == "suslov":
+            return ("Out of thin air, right at the player's feet, two «Вогняна куля» artifacts and a sausage just fell "
+                    "and lie on the ground in the shape of a dick. React: laugh, a crude joke about it, about Суслов "
+                    "or about whoever sent it.")
         if kind == "child":
             return (f"The Zone just spawned mutants ({ev.get('monster') or 'mutants'}, {ev.get('count') or 'a few'}) "
                     "nearby, and they are coming at you. Shout a warning, curse, or crack a grim joke.")
@@ -4274,8 +4292,11 @@ class Talker:
                         threading.Thread(target=self.report_rewards, daemon=True).start()
                     if line.startswith("zone"):  # the window's debug buttons
                         arg = line.split()[-1]
+                        who = (self.twitch.login if self.twitch and self.twitch.login else None) or "test"
                         if arg == "redeem":  # as if a viewer redeemed it: queued like a real one, PDA notice
-                            self.on_zone((self.twitch.login if self.twitch and self.twitch.login else None) or "test")
+                            self.on_zone(who)
+                        elif arg == "suslov":  # «Шари Суслова», as if redeemed (it never waits anyway)
+                            self.on_suslov(who)
                         else:  # "zone gift|life|child|any": at once
                             self.zone_test(arg)
                 else:

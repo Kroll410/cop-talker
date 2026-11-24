@@ -126,13 +126,13 @@ NICE = {"STALKER_DIR": "Game folder", "SPEAK_MODE": "Speaking", "PTT_KEY": "Push
         "TWITCH_QUEUE_MAX": "Messages waiting, at most", "TWITCH_REWARD": "Speech reward title",
         "TWITCH_UNPREFIXED": "Messages without $ or %", "TWITCH_DISTANCE": "NPC distance",
         "TWITCH_SHOW_NAME": "Nick in the PDA", "TWITCH_LINKS": "Viewer keeps his NPC", "TWITCH_BLOCKED": "Blocked words",
-        "TWITCH_ZONE_REWARD": "Zone reward title", "TWITCH_ZONE_GAP": "Minutes between Zone events",
+        "TWITCH_ZONE_REWARD": "Zone reward title", "TWITCH_SUSLOV_REWARD": "«Шари Суслова» reward", "TWITCH_ZONE_GAP": "Minutes between Zone events",
         "TWITCH_ZONE_PACK_MAX": "Most mutants per event",
         "LLM_PROVIDER": "Replies by", "CLAUDE_MODEL": "Claude model", "CLAUDE_CLI": "Claude Code program",
         "GEMINI_MODEL": "Gemini model", "GEMINI_SMART_MODEL": "Gemini model for deals",
         "STT_MODELS": "Speech recognition"}
 # Reward titles: picked from the channel's own rewards (Refresh asks Twitch), or typed.
-REWARD_PICK = {"TWITCH_REWARD", "TWITCH_ZONE_REWARD"}
+REWARD_PICK = {"TWITCH_REWARD", "TWITCH_ZONE_REWARD", "TWITCH_SUSLOV_REWARD"}
 WIDE = {"STALKER_DIR", "PLAYER_BIO", "NEWS_FEEDS", "CLAUDE_CLI", "TWITCH_BLOCKED", "STT_MODELS"}
 
 
@@ -436,7 +436,9 @@ class Window(QMainWindow):
                 ("Now: Дар", "gift", "A random item in your backpack, right now."),
                 ("Now: Життя", "life", "A random stalker, friend or enemy, right now."),
                 ("Now: Дитя", "child", "Mutants come for you, right now."),
-                ("Now: random", "any", "One of the three, rolled like a real redemption, right now.")):
+                ("Now: random", "any", "One of the three, rolled like a real redemption, right now."),
+                ("Шари Суслова", "suslov", "Two «Вогняна куля» and a «Ковбаса» on the ground in front of you, "
+                                           "right now (Settings → TWITCH_SUSLOV_REWARD for the real reward).")):
             btn = QPushButton(text)
             btn.setToolTip(tip)
             btn.clicked.connect(lambda _=False, a=arg: self.send_zone(a))

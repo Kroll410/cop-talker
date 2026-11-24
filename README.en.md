@@ -91,6 +91,8 @@ The PDA line shows the chance of what happened, e.g. "— шанс 4.1%".
 
 After an event, one or two NPCs nearby react out loud: surprise, a joke, a curse or a warning. This works in Chat only mode too. A friend the Zone sent greets you first. Several events in a row get one reaction per 20 seconds.
 
+**The "Шари Суслова" reward** (Affiliate/Partner). Another reward you make on Twitch yourself (no message) and pick in Settings → `TWITCH_SUSLOV_REWARD`. It goes off at once, no queue: two "Вогняна куля" artifacts and a "Ковбаса" between them land on the ground in front of you, in a well-known shape, and the NPCs around laugh at it. To try it without points, use the "Шари Суслова" button on the Twitch tab.
+
 Before each Zone event the game is saved as `talker_autosave` (one save, overwritten each time), so you can always load back. No save while you're dead or talking, during an emission or a scripted scene, or if one was made in the last 10 seconds.
 
 The Twitch tab shows the queue: what was rolled and when it happens. It also has buttons to try it without a real redemption: **Redeem (debug)** (like a real one, queued) and **Now: …** (at once). Needs the v14 game script: load a save after updating.

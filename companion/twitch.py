@@ -2,6 +2,7 @@
 The app never creates or deletes rewards (no POST/DELETE on custom_rewards): the channel owner makes them on
 Twitch and picks their titles in Settings; a missing one is reported by name and listened for by title.
 A second reward, made by the channel owner on Twitch (no message), can trigger a random Zone event (zone_title).
+More rewards can each run one thing at once (triggers: {title: fn(user, redemption)}), e.g. «Шари Суслова».
 
 Sign-in uses Twitch's device code flow (you open a link and type a code, no password ever reaches this app).
 Events come over EventSub WebSocket, so no public server or open port is needed.
@@ -29,7 +30,7 @@ def channel_login(text):
 
 class Twitch:
     def __init__(self, client_id, reward_title, token_file: Path, on_message, log,
-                 on_code=None, source="reward", channel="", zone_title="", on_zone=None):
+                 on_code=None, source="reward", channel="", zone_title="", on_zone=None, triggers=None):
         self.client_id = client_id
         self.source = source if source in SCOPES else "reward"
         self.scopes = SCOPES[self.source]
@@ -37,7 +38,10 @@ class Twitch:
         self.on_zone = on_zone or (lambda user, redemption: None)
         self.zone_reward_id = None
         self.zone_seen = []  # redemption ids already handed on (two subscriptions may both deliver one)
-        if self.zone_title and "channel:read:redemptions" not in self.scopes.split():
+        # trigger rewards: title (lower case) -> fn(user, redemption); their ids once found on the channel
+        self.triggers = {t.strip().lower(): fn for t, fn in (triggers or {}).items() if t and t.strip()}
+        self.trigger_ids = {}
+        if (self.zone_title or self.triggers) and "channel:read:redemptions" not in self.scopes.split():
             self.scopes += " channel:read:redemptions"  # chat mode too: the Zone reward is on your own channel
         self.channel = channel_login(channel)  # chat mode: whose chat to read (empty = your own)
         self.channel_id = None
@@ -178,6 +182,22 @@ class Twitch:
         self.log(f"Twitch: no reward «{self.zone_title}» on your channel yet (create it on Twitch, no message "
                  "needed). Listening for it by title.")
 
+    def find_triggers(self):
+        """Trigger rewards are made by hand on Twitch too: find their ids; a missing one is listened for by title."""
+        r = self.helix("GET", "/channel_points/custom_rewards", params={"broadcaster_id": self.user_id})
+        found = {rw["title"].strip().lower(): rw["id"] for rw in (r.json().get("data", []) if r.status_code == 200 else [])}
+        self.trigger_ids = {found[t]: t for t in self.triggers if t in found}
+        for t in self.triggers:
+            if t not in found:
+                self.log(f"Twitch: no reward «{t}» on your channel yet (create it on Twitch, no message needed). "
+                         "Listening for it by title.")
+
+    def trigger_for(self, ev):
+        """The trigger a redemption belongs to (by reward id, or by title if it wasn't found on connecting)."""
+        reward = ev.get("reward") or {}
+        title = self.trigger_ids.get(reward.get("id")) or (reward.get("title") or "").strip().lower()
+        return self.triggers.get(title)
+
     def is_zone(self, ev):
         reward = ev.get("reward") or {}
         if self.zone_reward_id and reward.get("id") == self.zone_reward_id:
@@ -217,6 +237,10 @@ class Twitch:
             self.subscribe_redemptions(session_id, self.reward_id)
         if self.zone_title:
             self.subscribe_redemptions(session_id, self.zone_reward_id)
+        for reward_id, _ in self.trigger_ids.items():
+            self.subscribe_redemptions(session_id, reward_id)
+        if self.triggers and len(self.trigger_ids) < len(self.triggers):  # one not on the channel yet: all of them
+            self.subscribe_redemptions(session_id, None)
 
     def subscribe_redemptions(self, session_id, reward_id):
         condition = {"broadcaster_user_id": self.user_id}
@@ -279,6 +303,13 @@ class Twitch:
 
     def on_redemption(self, ev):
         user = ev.get("user_name") or ev.get("user_login")
+        trigger = self.trigger_for(ev)
+        if trigger:
+            if ev.get("id") in self.zone_seen:
+                return
+            self.zone_seen = (self.zone_seen + [ev.get("id")])[-200:]
+            trigger(user, ev)
+            return
         if self.is_zone(ev):
             if ev.get("id") in self.zone_seen:
                 return
@@ -313,6 +344,8 @@ class Twitch:
                     self.find_reward()
                 if self.zone_title:
                     self.find_zone_reward()
+                if self.triggers:
+                    self.find_triggers()
                 wait = 10
                 while not self.stop.is_set():
                     self.listen()

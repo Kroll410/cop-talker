@@ -1044,6 +1044,10 @@ local function zone_provoke(obj)
 	obj:hit(h)
 end
 
+-- «Шари Суслова» layout, in metres: the two balls this far ahead of the player and this far to each side,
+-- the sausage's middle further ahead by SUSLOV_SHAFT, right between them.
+SUSLOV_AHEAD, SUSLOV_SHAFT, SUSLOV_BALLS = 1.6, 0.28, { 0.12, -0.12 }
+
 local function zone_event(text, save)
 	if not zone_seeded then zone_seeded = true; math.randomseed(os.time()) end
 	local what, caption, msg = string.match(text, "^([^|]*)|([^|]*)|(.*)$")
@@ -1096,6 +1100,35 @@ local function zone_event(text, save)
 		say()
 		for _, s in ipairs(spots) do zone_spawn(sec, s[1], s[2], { what = "child" }) end
 		done.ok, done.section, done.count = true, sec, #spots
+		return append_event(done)
+	end
+	if what == "suslov" then  -- «Шари Суслова»: two «Вогняна куля» side by side, a «Ковбаса» between them pointing away
+		local actor = db.actor
+		if not pick_existing({ "af_fireball" }) or not pick_existing({ "kolbasa" }) then
+			done.reason = "no item"; return append_event(done)
+		end
+		local d = actor:direction()
+		local fx, fz = d.x, d.z
+		local len = math.sqrt(fx * fx + fz * fz)
+		if len < 0.01 then fx, fz, len = 0, 1, 1 end
+		fx, fz = fx / len, fz / len   -- where he looks, flat on the ground
+		local rx, rz = fz, -fx        -- to his side
+		local apos, gv = actor:position(), actor:game_vertex_id()
+		local function at(ahead, side)  -- a spot on the ground: so many metres ahead, so many to the side
+			local p = vector():set(apos.x + fx * ahead + rx * side, apos.y, apos.z + fz * ahead + rz * side)
+			local lv = level.vertex_id(p)
+			if lv and lv < 4294967295 then p.y = level.vertex_position(lv).y else lv = actor:level_vertex_id() end
+			p.y = p.y + 0.1  -- dropped just above the ground, so nothing sinks into it
+			return p, lv
+		end
+		for _, side in ipairs(SUSLOV_BALLS) do
+			local p, lv = at(SUSLOV_AHEAD, side)
+			alife():create("af_fireball", p, lv, gv)
+		end
+		local p, lv = at(SUSLOV_AHEAD + SUSLOV_SHAFT, 0)
+		alife():create("kolbasa", p, lv, gv)
+		say()
+		done.ok, done.section = true, "af_fireball x2, kolbasa"
 		return append_event(done)
 	end
 	done.reason = "unknown"

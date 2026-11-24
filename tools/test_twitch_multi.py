@@ -58,6 +58,7 @@ class FakeBrain:
 t = talker.Talker.__new__(talker.Talker)
 t.busy, t.recording, t.twitch = threading.Lock(), False, None
 t.twitch_queue, t.twitch_links, t.twitch_names, t.next_twitch_note, t.left_npc = [], {}, {}, 0, {}
+t.zone_links = set()
 t.next_link_sync = 0
 t.spoken = []
 t.save_links = lambda: None

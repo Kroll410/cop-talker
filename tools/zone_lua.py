@@ -54,7 +54,8 @@ function alife() return {
   object = function(_, id) return objs[id] and { force_set_goodwill = function() end } or nil end,
   create = function(_, sec, pos, lv, gv, parent)
     next_id = next_id + 1
-    table.insert(created, { id = next_id, sec = sec, lv = lv, gv = gv, parent = parent, d = pos:distance_to(db.actor:position()) })
+    table.insert(created, { id = next_id, sec = sec, lv = lv, gv = gv, parent = parent, d = pos:distance_to(db.actor:position()),
+      x = pos.x, y = pos.y, z = pos.z })
     return { id = next_id }
   end } end
 -- walkable vertices: vertex N stands N metres east of the player
@@ -294,4 +295,30 @@ print("  gifts:", dict(got))
 check(got["vodka"] > got["medkit"] > got["wpn_addon_silencer"] and got["vodka"] > 5 * got["wpn_addon_silencer"],
       "cheap things come most; a cheap silencer still much rarer than vodka or a medkit")
 check(got["medkit"] > 2 * got["wpn_ak74"], "a medkit (250) comes far more often than an AK (4000)")
+
+# «Шари Суслова»: at once (no queue in the game either), two fireballs side by side ahead of the player, the sausage
+# right between them and further ahead, all just above the ground
+L.execute("""HAVE.af_fireball = true; HAVE.kolbasa = true; TUTORIAL = true
+level.vertex_id = function(p) return 5000 end
+function db.actor:direction() return vector():set(0, 0, 1) end""")
+take("created"); events(); take("news")
+inbox("zone||suslov|Шари Суслова|viewer шле привіт від Суслова")
+step(300)
+c, n, ev = take("created"), take("news"), events()
+balls = sorted((x for x in c if x["sec"] == "af_fireball"), key=lambda x: x["x"])
+sausage = [x for x in c if x["sec"] == "kolbasa"]
+check(len(balls) == 2 and len(sausage) == 1 and len(c) == 3, f"suslov: 2 fireballs and 1 sausage {[x['sec'] for x in c]}")
+if len(balls) == 2 and sausage:
+    s0 = sausage[0]
+    check(abs(balls[0]["x"] + balls[1]["x"]) < 1e-6 and balls[1]["x"] - balls[0]["x"] > 0.15,
+          f"the balls lie side by side, mirrored about the sausage's line ({balls[0]['x']:.2f}, {balls[1]['x']:.2f})")
+    check(abs(s0["x"]) < 1e-6 and s0["z"] > balls[0]["z"] == balls[1]["z"] > 1.0,
+          f"the sausage is between them, pointing away from the player (balls z={balls[0]['z']:.2f}, sausage z={s0['z']:.2f})")
+    check(all(abs(x["y"] - 0.1) < 1e-6 and x["parent"] is None for x in c), "all on the ground (just above it), none in the backpack")
+check(ev and ev[0]["ok"] and ev[0]["what"] == "suslov" and any("Суслова" in x for x in n), f"done, with a PDA line {ev} {n}")
+L.execute("HAVE.kolbasa = false")
+inbox("zone||suslov|c|t")
+step(300)
+ev = events()
+check(not take("created") and ev and not ev[0]["ok"] and ev[0]["reason"] == "no item", f"no sausage in the game: nothing spawned {ev}")
 print("OK" if ok else "FAIL")
