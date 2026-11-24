@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "companion"))
 import talker  # noqa: E402
 from twitch import Twitch  # noqa: E402
+from redeem_checks import check_redeem  # noqa: E402  (tools/redeem_checks.py)
 
 ok = True
 
@@ -74,16 +75,11 @@ what = talker.Talker.zone_what(t, "62", {})
 check("шиісят два" in what and "confused" in what and "nobody" in what,
       "the men around are told a voice shouts «шиісят два» from all round, and to be confused and freaked out")
 
-# a failed one is given up, not retried like a Zone event
-src = (ROOT / "companion" / "talker.py").read_text(encoding="utf-8")
-check(re.search(r'not in \([^)]*"62"\) and self\.zone\.retry', src), "a failed «62» isn't retried")
-check('TWITCH_62_REWARD, self.on_sixty_two' in src and 'arg == "62"' in src, "wired to Twitch and the test button")
+# one entry in companion/redeems.py: Twitch routing, the Redeems tab's picker and Test, the helper's test
+# command, and a failed one is given up, not retried like a Zone event
+check_redeem(check, "62", "TWITCH_62_REWARD", "on_sixty_two")
 
-# settings: the window names it and offers the channel's rewards for it; the example file has it
-app = (ROOT / "companion" / "app.py").read_text(encoding="utf-8")
-pick = re.search(r"REWARD_PICK = \{([^}]*)\}", app).group(1)
-check('"TWITCH_62_REWARD": "«62» reward"' in app and '"TWITCH_62_REWARD"' in pick, "Settings: a label and a reward picker")
-check('("62", "62",' in app, "Twitch tab: a «62» test button")
+# the example file has it
 ini = (ROOT / "settings.example.ini").read_text(encoding="utf-8")
 check(re.search(r"^TWITCH_62_REWARD=$", ini, re.M), "settings.example.ini has TWITCH_62_REWARD (empty = off)")
 for readme in ("README.md", "README.en.md"):

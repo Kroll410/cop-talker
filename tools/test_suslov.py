@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "companion"))
 import talker  # noqa: E402
 from twitch import Twitch  # noqa: E402
+from redeem_checks import check_redeem  # noqa: E402  (tools/redeem_checks.py)
 
 ok = True
 
@@ -36,6 +37,7 @@ tw.on_redemption({"id": "r4", "user_name": "Petro", "reward": {"id": "abc", "tit
 check(got == [("suslov", "Petro")], "found by its id after connecting, even if renamed")
 src = (ROOT / "companion" / "twitch.py").read_text(encoding="utf-8")
 check('"POST", "/channel_points/custom_rewards"' not in src, "the app never creates a reward")
+check_redeem(check, "suslov", "TWITCH_SUSLOV_REWARD", "on_suslov")  # routing, Redeems tab, test command
 
 # the helper: at once, straight to the game, not through the Zone queue
 sent = []

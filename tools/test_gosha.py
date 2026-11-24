@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "companion"))
 import talker  # noqa: E402
 from twitch import Twitch  # noqa: E402
+from redeem_checks import check_redeem  # noqa: E402  (tools/redeem_checks.py)
 
 ok = True
 
@@ -37,8 +38,7 @@ check(got == [("gosha", "Vasyl"), ("suslov", "Olia")], f"routed by title, once e
 src = (ROOT / "companion" / "twitch.py").read_text(encoding="utf-8")
 check('"POST", "/channel_points/custom_rewards"' not in src and '"DELETE"' not in src,
       "the app never creates or deletes a reward")
-tsrc = (ROOT / "companion" / "talker.py").read_text(encoding="utf-8")
-check("(TWITCH_GOSHA_REWARD, self.on_gosha)" in tsrc, "the setting's reward is routed to on_gosha")
+check_redeem(check, "gosha", "TWITCH_GOSHA_REWARD", "on_gosha")  # routing, Redeems tab, test command
 
 # the handler: at once, straight to the game, not through the Zone queue
 sent = []
@@ -89,9 +89,6 @@ what = talker.Talker.zone_what(t, "gosha", {}, {"name": "Гоша"})
 check("Гоша" in what and "найманці" in what and "shotgun" in what, f"the men around are told who came: {what}")
 
 # the window and the settings
-app = (ROOT / "companion" / "app.py").read_text(encoding="utf-8")
-check(re.search(r'REWARD_PICK = \{[^}]*"TWITCH_GOSHA_REWARD"', app), "Settings: picked from the channel's rewards")
-check('"TWITCH_GOSHA_REWARD": "«Гоша» reward"' in app and '("Гоша", "gosha",' in app, "a label and a test button")
 check(re.search(r"^TWITCH_GOSHA_REWARD=$", (ROOT / "settings.example.ini").read_text(encoding="utf-8"), re.M),
       "in settings.example.ini, off by default")
 for readme in ("README.md", "README.en.md"):

@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "companion"))
 import talker  # noqa: E402
 from twitch import Twitch  # noqa: E402
+from redeem_checks import check_redeem  # noqa: E402  (tools/redeem_checks.py)
 
 ok = True
 
@@ -34,11 +35,8 @@ got.clear()
 tw.on_redemption({"id": "r3", "user_name": "Petro", "reward": {"id": "abc", "title": "renamed on Twitch"}})
 check(got == [("giant", "Petro")], "found by its id after connecting, even if renamed")
 
-# the app wires the setting to the handler
-src = (ROOT / "companion" / "talker.py").read_text(encoding="utf-8")
-check("(TWITCH_GIANT_REWARD, self.on_giant)" in src, "TWITCH_GIANT_REWARD routes to on_giant")
-app = (ROOT / "companion" / "app.py").read_text(encoding="utf-8")
-check('"TWITCH_GIANT_REWARD"' in app and '"giant"' in app, "Settings picker and a test button in the window")
+# one entry in companion/redeems.py: Twitch routing, the Redeems tab's picker and Test, the helper's test command
+check_redeem(check, "giant", "TWITCH_GIANT_REWARD", "on_giant")
 ini = (ROOT / "settings.example.ini").read_text(encoding="utf-8")
 check("TWITCH_GIANT_REWARD=" in ini.splitlines(), "in settings.example.ini, off by default")
 

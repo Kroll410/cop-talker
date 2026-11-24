@@ -1316,6 +1316,8 @@ from news import DEFAULT_FEEDS, News  # noqa: E402  (companion/news.py)
 from lore import lore_for  # noqa: E402  (companion/lore.py)
 import prices  # noqa: E402  (companion/prices.py: the game's own trade prices)
 import zone  # noqa: E402  (companion/zone.py: the Twitch Zone reward's random events)
+import redeems  # noqa: E402  (companion/redeems.py: every channel-points redeem, one list)
+NO_RETRY = {r.id for r in redeems.TRIGGERS}  # fired at once: a failed one is given up, never queued again
 
 USAGE = Usage(ROOT / "usage.json")
 
@@ -2912,13 +2914,7 @@ class Talker:
                                  on_code=lambda url, code: report("TWITCH_CODE", f"{url}|{code}"),
                                  source=TWITCH_SOURCE, channel=TWITCH_CHANNEL,
                                  zone_title=TWITCH_ZONE_REWARD, on_zone=self.on_zone,
-                                 triggers={title: fn for title, fn in ((TWITCH_SUSLOV_REWARD, self.on_suslov),
-                                                                       (TWITCH_GIANT_REWARD, self.on_giant),
-                                                                       (TWITCH_VOVA_REWARD, self.on_vova),
-                                                                       (TWITCH_ANEKDOT_REWARD, self.on_anekdot),
-                                                                       (TWITCH_GOSHA_REWARD, self.on_gosha),
-                                                                       (TWITCH_62_REWARD, self.on_sixty_two)) if title}
-                                 or None)
+                                 triggers=redeems.triggers(os.environ, self) or None)
             self.twitch.start()
 
     def show_line(self, npc_id, text, pda_text=None):
@@ -3966,7 +3962,7 @@ class Talker:
                                                          f", no autosave: {ev['autosave']}" if ev.get("autosave") else "")
                 if ev.get("ok"):
                     log(f"  Zone: done ({ev.get('section')}{' x' + str(ev['count']) if ev.get('count') else ''}{saved})")
-                elif item and item.get("kind") not in ("suslov", "giant", "vova", "anekdot", "gosha", "62") and self.zone.retry(item, time.time()):
+                elif item and item.get("kind") not in NO_RETRY and self.zone.retry(item, time.time()):
                     log(f"  Zone: the game couldn't do it ({ev.get('reason')}), trying again in 30 s")
                 else:
                     log(f"  Zone: the game couldn't do it ({ev.get('reason')}), given up")
@@ -4411,18 +4407,10 @@ class Talker:
                         who = (self.twitch.login if self.twitch and self.twitch.login else None) or "test"
                         if arg == "redeem":  # as if a viewer redeemed it: queued like a real one, PDA notice
                             self.on_zone(who)
-                        elif arg == "suslov":  # «Шари Суслова», as if redeemed (it never waits anyway)
-                            self.on_suslov(who)
-                        elif arg == "giant":  # «Хуй будеш?», as if redeemed (no queue either)
-                            self.on_giant(who)
-                        elif arg == "vova":  # «Вова Віст», as if redeemed (no queue either)
-                            self.on_vova(who)
-                        elif arg == "anekdot":  # «Анекдот», as if redeemed (no queue either)
-                            self.on_anekdot(who)
-                        elif arg == "gosha":  # «Гоша», as if redeemed (no queue either)
-                            self.on_gosha(who)
-                        elif arg == "62":  # «62», as if redeemed (no queue either)
-                            self.on_sixty_two(who)
+                        elif arg == "speech":  # the speech reward: a line said by an NPC near you
+                            self.on_twitch(who, "$Перевірка зв'язку. Прийом.", None)
+                        elif redeems.by_id(arg) and redeems.by_id(arg).kind == "trigger":  # as if redeemed, at once
+                            getattr(self, redeems.by_id(arg).handler)(who)
                         else:  # "zone gift|life|child|any": at once
                             self.zone_test(arg)
                 else:

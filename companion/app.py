@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QProcess, QProcessEnvironment, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QFont, QTextCursor
-from PySide6.QtWidgets import (QApplication, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QApplication, QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
                                QTabWidget, QVBoxLayout, QWidget)
 
@@ -22,6 +22,7 @@ SETTINGS = ROOT / "settings.ini"
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from settings_file import ensure_settings, read_text  # noqa: E402  (settings.ini from the example, plus new options)
+import redeems  # noqa: E402  (every Twitch redeem the app knows, one list)
 
 try:
     SETTINGS_NOTE = ensure_settings(ROOT)
@@ -103,6 +104,8 @@ QLabel#muted {{ color: {MUTED}; }}
 QLabel#secondary {{ color: {TEXT2}; }}
 QLabel#section {{ color: {TEXT}; font-size: 11pt; font-weight: 500; padding-top: 16px; }}
 QLabel#state {{ font-weight: 500; }}
+QLabel#name {{ color: {TEXT}; font-weight: 600; }}
+QFrame#hair {{ background: {HAIR}; border: none; }}
 """
 
 # "On air": the dot next to the status. Lit amber while the game is on, an amber ring while waiting for it.
@@ -126,19 +129,9 @@ NICE = {"STALKER_DIR": "Game folder", "SPEAK_MODE": "Speaking", "PTT_KEY": "Push
         "TWITCH_QUEUE_MAX": "Messages waiting, at most", "TWITCH_REWARD": "Speech reward title",
         "TWITCH_UNPREFIXED": "Messages without $ or %", "TWITCH_DISTANCE": "NPC distance",
         "TWITCH_SHOW_NAME": "Nick in the PDA", "TWITCH_LINKS": "Viewer keeps his NPC", "TWITCH_BLOCKED": "Blocked words",
-        "TWITCH_ZONE_REWARD": "Zone reward title", "TWITCH_SUSLOV_REWARD": "«Шари Суслова» reward",
-        "TWITCH_GIANT_REWARD": "«Хуй будеш?» reward",
-        "TWITCH_VOVA_REWARD": "«Вова Віст» reward", "TWITCH_ANEKDOT_REWARD": "«Анекдот» reward",
-        "TWITCH_GOSHA_REWARD": "«Гоша» reward", "TWITCH_62_REWARD": "«62» reward",
-        "TWITCH_ZONE_GAP": "Minutes between Zone events",
-        "TWITCH_ZONE_PACK_MAX": "Most mutants per event",
         "LLM_PROVIDER": "Replies by", "CLAUDE_MODEL": "Claude model", "CLAUDE_CLI": "Claude Code program",
         "GEMINI_MODEL": "Gemini model", "GEMINI_SMART_MODEL": "Gemini model for deals",
         "STT_MODELS": "Speech recognition"}
-# Reward titles: picked from the channel's own rewards (Refresh asks Twitch), or typed.
-REWARD_PICK = {"TWITCH_REWARD", "TWITCH_ZONE_REWARD", "TWITCH_SUSLOV_REWARD", "TWITCH_VOVA_REWARD",
-               "TWITCH_ANEKDOT_REWARD", "TWITCH_GIANT_REWARD", "TWITCH_GOSHA_REWARD",
-               "TWITCH_62_REWARD"}
 WIDE = {"STALKER_DIR", "PLAYER_BIO", "NEWS_FEEDS", "CLAUDE_CLI", "TWITCH_BLOCKED", "STT_MODELS"}
 
 
@@ -185,12 +178,11 @@ def log_html(line):
 class SettingsTab(QWidget):
     """A form built from settings.ini: the comment above each key becomes its hint."""
 
-    def __init__(self, on_save, on_refresh_rewards=None):
+    def __init__(self, on_save):
         super().__init__()
         self.on_save = on_save
-        self.on_refresh_rewards = on_refresh_rewards or (lambda: False)
         self.fields = {}
-        self.reward_notes = []
+        self.hints = {}  # key -> the notes above it in settings.ini (the Redeems tab shows its keys' notes too)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 12, 0, 0)
         outer.setSpacing(12)
@@ -229,20 +221,21 @@ class SettingsTab(QWidget):
                 title = QLabel(s.strip("[]"))
                 title.setObjectName("section")
                 self.form.addRow(title)
+                if s == "[Twitch]":
+                    where = QLabel("Rewards, the Zone event's gap and pack, and the test buttons are on the Redeems tab.")
+                    where.setObjectName("muted")
+                    self.form.addRow(where)
                 hint = []
             elif "=" in s and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", s.split("=", 1)[0].strip()):
                 key, value = s.split("=", 1)
                 key, value = key.strip(), value.strip()
                 text = " ".join(hint)
+                hint = []
+                self.hints[key] = text
+                if key in redeems.KEYS:  # shown on the Redeems tab, which adopts them (adopt)
+                    continue
                 m = re.search(r"options:\s*([\w, ]+)$", text)
-                if key in REWARD_PICK:
-                    field = QComboBox()
-                    field.setEditable(True)  # Twitch not reachable now: the title can still be typed
-                    field.addItem("")  # empty = none
-                    if value:
-                        field.addItem(value)
-                    field.setCurrentText(value)
-                elif m:
+                if m:
                     field = QComboBox()
                     field.addItems([o.strip() for o in m.group(1).split(",") if o.strip()])
                     field.setCurrentText(value)
@@ -250,8 +243,7 @@ class SettingsTab(QWidget):
                 else:
                     field = QLineEdit(value)
                 field.setToolTip(text)
-                field.setMaximumWidth(360 if key in REWARD_PICK else 240 if isinstance(field, QComboBox)
-                                      else 720 if key in WIDE else 360)
+                field.setMaximumWidth(240 if isinstance(field, QComboBox) else 720 if key in WIDE else 360)
                 label = QLabel(NICE.get(key, key.replace("_", " ").capitalize()))
                 label.setToolTip(text)
                 label.setContentsMargins(0, 6, 0, 0)  # level with the text inside the field
@@ -260,22 +252,7 @@ class SettingsTab(QWidget):
                 box = QVBoxLayout(cell)
                 box.setContentsMargins(0, 0, 0, 0)
                 box.setSpacing(4)
-                if key in REWARD_PICK:
-                    pick = QHBoxLayout()
-                    pick.setSpacing(8)
-                    pick.addWidget(field, 1)
-                    refresh = QPushButton("Refresh")
-                    refresh.setToolTip("Ask Twitch for all channel-points rewards of your channel")
-                    refresh.clicked.connect(self.refresh_rewards)
-                    pick.addWidget(refresh)
-                    status = QLabel("")
-                    status.setObjectName("muted")
-                    pick.addWidget(status)
-                    pick.addStretch()
-                    self.reward_notes.append(status)
-                    box.addLayout(pick)
-                else:
-                    box.addWidget(field)
+                box.addWidget(field)
                 note = QLabel((html.escape(text.rstrip(". ")) + "&nbsp;&nbsp;" if text else "")
                               + span(key, "#6f6c5f", mono=True))
                 note.setObjectName("muted")
@@ -284,40 +261,31 @@ class SettingsTab(QWidget):
                 self.form.addRow(label, cell)
                 self.fields[key] = field
                 self.loaded[key] = self.value(key)  # what the form showed, to know later what YOU changed
-                hint = []
 
-    def refresh_rewards(self):
-        self.reward_status("asking Twitch..." if self.on_refresh_rewards() else
-                           "start the helper and sign in to Twitch first")
+    def raw(self, key, default=""):
+        """A setting as settings.ini had it when the window read it."""
+        for line in self.lines:
+            k, sep, v = line.partition("=")
+            if sep and k.strip() == key:
+                return v.split(" #")[0].strip()
+        return default
 
-    def reward_status(self, text):
-        for note in self.reward_notes:
-            note.setText(text)
-
-    def set_rewards(self, titles):
-        """The channel's rewards from Twitch: offered in every reward picker; the chosen title stays."""
-        for key in REWARD_PICK:
-            f = self.fields.get(key)
-            if not isinstance(f, QComboBox):
-                continue
-            current = f.currentText()
-            f.blockSignals(True)
-            f.clear()
-            f.addItem("")
-            f.addItems(titles)
-            if current and current not in titles:
-                f.addItem(current)  # not on the channel (yet): keep it, the helper creates or waits for it
-            f.setCurrentText(current)
-            f.blockSignals(False)
-        self.reward_status(f"{len(titles)} reward(s) on the channel" if titles else "no rewards on the channel yet")
+    def adopt(self, key, field):
+        """A field another tab shows (the Redeems tab): saved with the rest, by Save on either tab."""
+        self.fields[key] = field
+        self.loaded[key] = self.value(key)
 
     def value(self, key):
         f = self.fields[key]
+        if hasattr(f, "setting_value"):
+            return f.setting_value()
         return f.currentText() if isinstance(f, QComboBox) else f.text().strip()
 
     def set_value(self, key, value):
         f = self.fields.get(key)
-        if isinstance(f, QComboBox):
+        if hasattr(f, "set_setting_value"):
+            f.set_setting_value(value)
+        elif isinstance(f, QComboBox):
             f.setCurrentText(value)
         elif f is not None:
             f.setText(value)
@@ -327,18 +295,246 @@ class SettingsTab(QWidget):
         so lines added to settings.ini by hand while the window was open are kept."""
         changed = {k: self.value(k) for k in self.fields if self.value(k) != self.loaded.get(k)}
         current = read_text(SETTINGS).splitlines() if SETTINGS.exists() else self.lines
-        out = []
+        out, written = [], set()
         for line in current:
             s = line.strip()
             if "=" in s and not s.startswith(("#", "[")):
                 key = s.split("=", 1)[0].strip()
                 if key in changed:
                     line = f"{key}={changed[key]}"
+                    written.add(key)
             out.append(line)
+        out += [f"{k}={v}" for k, v in changed.items() if k not in written]  # its line was gone from the file
         SETTINGS.write_text("\n".join(out) + "\n", encoding="utf-8")
         self.lines = out
         self.loaded.update(changed)
         self.on_save()
+
+
+OFF = "Off"
+
+
+class RewardPicker(QComboBox):
+    """A reward title from the channel's own rewards (the app only reads them), or Off. Editable, so a title can be
+    typed while Twitch can't be asked (helper stopped, or a chat-mode sign-in that may not read rewards yet)."""
+
+    def __init__(self, value):
+        super().__init__()
+        self.setEditable(True)
+        self.lineEdit().setPlaceholderText(OFF)
+        self.titles = None  # the channel's rewards once Twitch answered
+        self.fill([])
+        self.set_setting_value(value)
+
+    def setting_value(self):
+        text = self.currentText().strip()
+        return "" if text.lower() == OFF.lower() else text
+
+    def set_setting_value(self, value):
+        value = (value or "").strip()
+        if value and self.findText(value) < 0:
+            self.addItem(value)
+        self.setCurrentIndex(self.findText(value) if value else 0)
+
+    def fill(self, titles):
+        current = self.setting_value() if self.count() else ""
+        self.blockSignals(True)
+        self.clear()
+        self.addItem(OFF)
+        self.addItems(titles)
+        self.set_setting_value(current)  # a title not on the channel (yet) stays: the helper waits for it
+        self.blockSignals(False)
+
+    def state(self):
+        """(dot, words) for the row: on, off, or set but not on the channel."""
+        title = self.setting_value()
+        if not title:
+            return "off", "Off"
+        if self.titles is not None and title.lower() not in {t.lower() for t in self.titles}:
+            return "waiting", "Not on the channel yet: make it on Twitch"
+        return "live", "On"
+
+
+class RedeemsTab(QWidget):
+    """Every redeem in redeems.REDEEMS: what it does, the Twitch reward it's tied to, whether it's on, a test."""
+
+    def __init__(self, settings, ask_rewards, send_test):
+        super().__init__()
+        self.settings, self.ask_rewards, self.send_test = settings, ask_rewards, send_test
+        self.pickers, self.states = {}, {}
+        self.zone_queue = QLabel("Nothing waiting")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 12, 0, 0)
+        outer.setSpacing(12)
+        head = QHBoxLayout()
+        head.setContentsMargins(4, 0, 16, 0)
+        head.setSpacing(12)
+        intro = QLabel("Tie each redeem to a channel-points reward you made on Twitch. "
+                       "The app only reads your rewards, it never adds or removes any.")
+        intro.setObjectName("secondary")
+        intro.setWordWrap(True)
+        head.addWidget(intro, 1)
+        refresh = QPushButton("Refresh rewards")
+        refresh.setToolTip("Ask Twitch for the rewards on your channel")
+        refresh.clicked.connect(self.refresh)
+        head.addWidget(refresh, 0, Qt.AlignTop)
+        outer.addLayout(head)
+        self.note = QLabel("Rewards not loaded yet: they come in once Twitch is on, or press Refresh rewards")
+        self.note.setObjectName("muted")
+        self.note.setWordWrap(True)
+        self.note.setContentsMargins(4, 0, 16, 0)
+        outer.addWidget(self.note)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        inner = QWidget()
+        self.layouts = []  # (row, its picker + Test): side by side, or stacked when the window is narrow
+        self.rows = QVBoxLayout(inner)
+        self.rows.setContentsMargins(4, 0, 16, 16)
+        self.rows.setSpacing(0)
+        for i, r in enumerate(redeems.REDEEMS):
+            if i:
+                line = QFrame()
+                line.setObjectName("hair")
+                line.setFixedHeight(1)
+                self.rows.addWidget(line)
+            self.rows.addWidget(self.row(r))
+        self.rows.addStretch()
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, 1)
+
+        foot = QHBoxLayout()
+        foot.addStretch()
+        save = QPushButton("Save and restart")
+        save.setObjectName("primary")
+        save.clicked.connect(self.settings.save)
+        foot.addWidget(save)
+        outer.addLayout(foot)
+
+    def row(self, r):
+        box = QWidget()
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(0, 14, 0, 14)
+        lay.setSpacing(16)
+        text = QVBoxLayout()
+        text.setSpacing(4)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        dot = QLabel()
+        dot.setFixedSize(8, 8)
+        name = QLabel(r.name)
+        name.setObjectName("name")
+        state = QLabel()
+        state.setObjectName("muted")
+        top.addWidget(dot)
+        top.addWidget(name)
+        top.addSpacing(4)
+        top.addWidget(state, 1)
+        text.addLayout(top)
+        what = QLabel(r.what)
+        what.setObjectName("secondary")
+        what.setWordWrap(True)
+        what.setContentsMargins(16, 0, 0, 0)  # under the name, past the dot
+        text.addWidget(what)
+        if r.kind == "zone":
+            text.addLayout(self.zone_extras(r))
+        lay.addLayout(text, 1)
+
+        picker = RewardPicker(self.settings.raw(r.key))
+        picker.setFixedWidth(200)
+        picker.setToolTip(f"The reward on your channel that runs it. {OFF} = none.  ({r.key})")
+        picker.currentTextChanged.connect(lambda _=None, rid=r.id: self.show_state(rid))
+        self.settings.adopt(r.key, picker)
+        test = QPushButton("Test")
+        test.setToolTip("As if a viewer redeemed it, right now. Needs the helper running and the game on."
+                        + (" Queued like a real one." if r.kind == "zone" else ""))
+        test.clicked.connect(lambda _=False, a="redeem" if r.kind == "zone" else r.id: self.test(a))
+        right = QWidget()
+        pick = QHBoxLayout(right)
+        pick.setContentsMargins(0, 0, 0, 0)
+        pick.setSpacing(8)
+        pick.addWidget(picker)
+        pick.addWidget(test)
+        lay.addWidget(right, 0, Qt.AlignLeft | Qt.AlignTop)
+        self.layouts.append((lay, right))
+        self.pickers[r.id] = picker
+        self.states[r.id] = (dot, state)
+        self.show_state(r.id)
+        return box
+
+    def zone_extras(self, r):
+        """The Zone event's own settings (gap, pack) and its fire-now buttons, under its description."""
+        col = QVBoxLayout()
+        col.setContentsMargins(16, 8, 0, 0)
+        col.setSpacing(8)
+        knobs = QHBoxLayout()
+        knobs.setSpacing(8)
+        for key, label in zip(r.extra, ("Gap, minutes", "Mutants, at most")):
+            name = QLabel(label)
+            name.setObjectName("secondary")
+            field = QLineEdit(self.settings.raw(key))
+            field.setFixedWidth(56)
+            field.setToolTip(f"{self.settings.hints.get(key, '')}  ({key})".strip())
+            name.setToolTip(field.toolTip())
+            self.settings.adopt(key, field)
+            knobs.addWidget(name)
+            knobs.addWidget(field)
+            knobs.addSpacing(12)
+        knobs.addStretch()
+        col.addLayout(knobs)
+        now = QHBoxLayout()
+        now.setSpacing(8)
+        lead = QLabel("Fire now")
+        lead.setObjectName("secondary")
+        now.addWidget(lead)
+        for text, arg, tip in (("Дар", "gift", "A random item in your backpack."),
+                               ("Життя", "life", "A random stalker, friend or enemy."),
+                               ("Дитя", "child", "Mutants come for you."),
+                               ("Random", "any", "One of the three, rolled like a real redemption.")):
+            btn = QPushButton(text)
+            btn.setToolTip(tip + " Skips the queue.")
+            btn.clicked.connect(lambda _=False, a=arg: self.test(a))
+            now.addWidget(btn)
+        now.addStretch()
+        col.addLayout(now)
+        self.zone_queue.setObjectName("muted")
+        self.zone_queue.setWordWrap(True)
+        col.addWidget(self.zone_queue)
+        return col
+
+    NARROW = 720  # below this the picker and Test go under the description
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        narrow = self.width() < self.NARROW
+        for lay, right in self.layouts:
+            lay.setDirection(QHBoxLayout.TopToBottom if narrow else QHBoxLayout.LeftToRight)
+            lay.setSpacing(10 if narrow else 16)
+            right.setContentsMargins(16 if narrow else 0, 0, 0, 0)  # under the name, past the dot
+
+    def show_state(self, rid):
+        dot, words = self.pickers[rid].state()
+        if redeems.by_id(rid).kind == "speech" and dot == "live" and self.settings.raw("TWITCH_SOURCE") != "reward":
+            dot, words = "waiting", "Waits for reward mode (Settings → Twitch → Source)"
+        ring, label = self.states[rid]
+        ring.setStyleSheet(DOT[dot] + " border-radius: 4px;")
+        label.setText(words)
+
+    def test(self, arg):
+        if not self.send_test(arg):
+            self.note.setText("Start the helper first (Start at the top), then test.")
+
+    def refresh(self):
+        self.note.setText("Asking Twitch..." if self.ask_rewards() else "Start the helper and sign in to Twitch first")
+
+    def set_rewards(self, titles):
+        """The channel's rewards from Twitch: offered in every picker; a chosen title stays."""
+        for rid, picker in self.pickers.items():
+            picker.titles = list(titles)
+            picker.fill(titles)
+            self.show_state(rid)
+        self.note.setText(f"{len(titles)} reward(s) on the channel" if titles else "No rewards on the channel yet")
 
 
 class Window(QMainWindow):
@@ -420,9 +616,10 @@ class Window(QMainWindow):
             "word for word, one starting with <b>%</b> is retold by the NPC his own way. Other messages are "
             "ignored (Settings → TWITCH_UNPREFIXED). A random NPC near you says it; nobody near? It waits.</li>"
             "<li><b>reward</b> mode (Settings → Twitch → TWITCH_SOURCE): make a channel-points reward with a "
-            "message on Twitch yourself and pick it in Settings → TWITCH_REWARD; needs Affiliate/Partner.</li>"
-            "<li>The app never adds rewards to your channel. Every reward (the speech one, the Zone one) is made "
-            "by you on Twitch; one that isn't there is named in the status above, and the app waits for it.</li></ol>")
+            "message on Twitch yourself and pick it on the <b>Redeems</b> tab as Speech; needs Affiliate/Partner.</li>"
+            "<li>The app never adds rewards to your channel. You make every reward on Twitch, then tie it to what it "
+            "does on the <b>Redeems</b> tab. One that isn't there is named in the status above, and the app waits "
+            "for it.</li></ol>")
         guide.setOpenExternalLinks(True)
         guide.setWordWrap(True)
         guide.setMaximumWidth(760)
@@ -430,49 +627,16 @@ class Window(QMainWindow):
         tl.addWidget(self.twitch_queue)
         tl.addLayout(auth_row)
         tl.addWidget(self.twitch_code)
-        # Zone reward: what's waiting (rolled at redemption) and debug buttons that need no real redemption
-        zone_title = QLabel("Zone events (Settings → TWITCH_ZONE_REWARD)")
-        self.zone_queue = QLabel("Nothing waiting")
-        self.zone_queue.setObjectName("secondary")
-        self.zone_queue.setWordWrap(True)
-        zone_row = QHBoxLayout()
-        for text, arg, tip in (
-                ("Redeem (debug)", "redeem", "As if a viewer redeemed the Zone reward: rolled now, a PDA notice, "
-                                             "queued like a real one (first in the queue: at once)."),
-                ("Now: Дар", "gift", "A random item in your backpack, right now."),
-                ("Now: Життя", "life", "A random stalker, friend or enemy, right now."),
-                ("Now: Дитя", "child", "Mutants come for you, right now."),
-                ("Now: random", "any", "One of the three, rolled like a real redemption, right now."),
-                ("Шари Суслова", "suslov", "Two «Вогняна куля» and a «Ковбаса» on the ground in front of you, "
-                                           "right now (Settings → TWITCH_SUSLOV_REWARD for the real reward)."),
-                ("Хуй будеш?", "giant", "One pseudogiant near you, hostile and coming for you, right now "
-                                        "(Settings → TWITCH_GIANT_REWARD for the real reward)."),
-                ("Вова Віст", "vova", "A soldier, «Вова Віст», with a machine gun that whistles (100x as fast, "
-                                     "1000x less damage) and shoots at everyone but you, right now "
-                                     "(Settings → TWITCH_VOVA_REWARD for the real reward)."),
-                ("Анекдот", "anekdot", "A «Хліб», a «Ковбаса» and a handful of bolts on the ground in front of you, "
-                                       "right now: they roll, but can't be picked up "
-                                       "(Settings → TWITCH_ANEKDOT_REWARD for the real reward)."),
-                ("Гоша", "gosha", "A Mercenary (найманець) named «Гоша» with a SPAS-12, 15-30 m away and coming "
-                                  "for you, right now (Settings → TWITCH_GOSHA_REWARD for the real reward)."),
-                ("62", "62", "«шиісят два» shouted 10 times from all round you, each from its own spot, at its own "
-                             "volume, pitch, speed and delay, right now (Settings → TWITCH_62_REWARD for the real reward).")):
-            btn = QPushButton(text)
-            btn.setToolTip(tip)
-            btn.clicked.connect(lambda _=False, a=arg: self.send_zone(a))
-            zone_row.addWidget(btn)
-        zone_row.addStretch()
-        tl.addWidget(zone_title)
-        tl.addWidget(self.zone_queue)
-        tl.addLayout(zone_row)
         tl.addWidget(guide)
         tl.addStretch()
 
         tabs = QTabWidget()
         tabs.addTab(self.log, "Log")
-        self.settings = SettingsTab(self.restart, self.request_rewards)
+        self.settings = SettingsTab(self.restart)
+        self.redeems = RedeemsTab(self.settings, self.request_rewards, self.send_zone)
         tabs.addTab(self.settings, "Settings")
         tabs.addTab(twitch, "Twitch")
+        tabs.addTab(self.redeems, "Redeems")
 
         self.usage = QLabel("Usage: -")
         self.usage.setObjectName("muted")
@@ -549,11 +713,11 @@ class Window(QMainWindow):
         return True
 
     def send_zone(self, arg):
-        """Debug: tell the helper to fire (or queue) a Zone event without a real Twitch redemption."""
+        """Test: the helper fires a redeem (or queues a Zone event) as if a viewer redeemed it. False: not running."""
         if not self.proc:
-            self.zone_queue.setText("Start the helper first (Start button at the top).")
-            return
+            return False
         self.proc.write(f"zone {arg}\n".encode())
+        return True
 
     def auth_done(self):
         self.auth_btn.setEnabled(True)
@@ -622,11 +786,11 @@ class Window(QMainWindow):
                 self.auth_done()
         elif kind == "REWARDS":
             try:
-                self.settings.set_rewards(json.loads(text))
+                self.redeems.set_rewards(json.loads(text))
             except ValueError:
                 pass
         elif kind == "REWARDS_ERROR":
-            self.settings.reward_status(text)
+            self.redeems.note.setText(text)
         elif kind == "ZONE":
             try:
                 rows = json.loads(text)
@@ -636,7 +800,7 @@ class Window(QMainWindow):
             for r in rows:
                 when = "now (test)" if r.get("test") else "in %d:%02d" % divmod(r["in"], 60)
                 lines.append(f"{when} — {r['label']} ({r['user']})")
-            self.zone_queue.setText("\n".join(lines) if lines else "Nothing waiting")
+            self.redeems.zone_queue.setText("\n".join(lines) if lines else "Nothing waiting")
         elif kind == "TWITCH_QUEUE":
             self.twitch_queue.setText(f"Waiting messages: {text}")
         elif kind == "TWITCH_CODE":

@@ -35,38 +35,66 @@ try:
     settings = tmp / "settings.ini"
     shutil.copy(ROOT / "settings.example.ini", settings)
     app.SETTINGS = settings
-    asked = []
-    tab = app.SettingsTab(lambda: None, lambda: asked.append(1) or True)
-    zone_f, say_f = tab.fields["TWITCH_ZONE_REWARD"], tab.fields["TWITCH_REWARD"]
-    check(isinstance(zone_f, QComboBox) and zone_f.isEditable() and isinstance(say_f, QComboBox),
-          "both reward titles are editable lists")
-    check(tab.value("TWITCH_ZONE_REWARD") == "" and tab.value("TWITCH_REWARD") == "",
-          "both start empty: the app makes no reward of its own")
-    say_f.setCurrentText("Скажи через сталкера")  # as if picked earlier
-    tab.refresh_rewards()
-    check(asked == [1] and "asking" in tab.reward_notes[0].text(), "Refresh asks the helper")
+    asked, tests = [], []
+    tab = app.SettingsTab(lambda: None)
+    red = app.RedeemsTab(tab, lambda: asked.append(1) or True, lambda arg: tests.append(arg) or True)
+    zone_f, say_f = red.pickers["zone"], red.pickers["speech"]
+    check(isinstance(zone_f, QComboBox) and zone_f.isEditable() and tab.fields["TWITCH_ZONE_REWARD"] is zone_f,
+          "the Redeems tab's pickers are editable lists, saved with the other settings")
+    check(set(red.pickers) == {r.id for r in app.redeems.REDEEMS}, "a row for every redeem in redeems.py")
+    check(not any(k in tab.fields and not isinstance(tab.fields[k], app.RewardPicker) for k in
+                  [r.key for r in app.redeems.REDEEMS]), "reward titles are no longer plain Settings fields")
+    check(tab.value("TWITCH_ZONE_REWARD") == "" and tab.value("TWITCH_REWARD") == "" and zone_f.currentText() == "Off",
+          "all start Off: the app makes no reward of its own")
+    check(red.states["zone"][1].text() == "Off", "the row says it's off")
+    say_f.set_setting_value("Скажи через сталкера")  # as if picked earlier
+    red.refresh()
+    check(asked == [1] and "Asking" in red.note.text(), "Refresh asks the helper")
 
-    # the helper answers: the window fills both lists
-    me = types.SimpleNamespace(settings=tab)
+    # the helper answers: the window fills every list
+    me = types.SimpleNamespace(settings=tab, redeems=red)
     app.Window.handle_report(me, "REWARDS|" + json.dumps(["Hydrate", "Зона", "Скажи через сталкера"]))
     items = [zone_f.itemText(i) for i in range(zone_f.count())]
-    check(items == ["", "Hydrate", "Зона", "Скажи через сталкера"], f"Zone list: off + the channel's rewards {items}")
-    check(say_f.itemText(0) == "", "the speech reward can be set to none too")
+    check(items == ["Off", "Hydrate", "Зона", "Скажи через сталкера"], f"Zone list: Off + the channel's rewards {items}")
     check(tab.value("TWITCH_REWARD") == "Скажи через сталкера", "the chosen title stays after a refresh")
-    check("3 reward" in tab.reward_notes[0].text(), f"status: {tab.reward_notes[0].text()}")
+    check("3 reward" in red.note.text(), f"status: {red.note.text()}")
     zone_f.setCurrentText("Зона")
+    check(red.states["zone"][1].text() == "On", "picked: the row says it's on")
+    gap = tab.fields["TWITCH_ZONE_GAP"]
+    gap.setText("3-4")
     tab.save()
     saved = settings.read_text(encoding="utf-8")
-    check("TWITCH_ZONE_REWARD=Зона" in saved and "TWITCH_REWARD=Скажи через сталкера" in saved,
-          "picked title saved to settings.ini")
+    check("TWITCH_ZONE_REWARD=Зона" in saved and "TWITCH_REWARD=Скажи через сталкера" in saved
+          and "TWITCH_ZONE_GAP=3-4" in saved, "picked titles and the Zone gap saved to settings.ini")
+    zone_f.setCurrentIndex(0)
+    tab.save()
+    check(re.search(r"^TWITCH_ZONE_REWARD=$", settings.read_text(encoding="utf-8"), re.M), "Off saves an empty title")
+    zone_f.setCurrentText("Зона")
     app.Window.handle_report(me, "REWARDS|" + json.dumps(["Other"]))
     check(tab.value("TWITCH_ZONE_REWARD") == "Зона" and zone_f.findText("Зона") >= 0,
           "a saved title no longer on the channel is kept in the list")
+    check("Not on the channel" in red.states["zone"][1].text(), "and the row says to make it on Twitch")
     app.Window.handle_report(me, "REWARDS_ERROR|Twitch: The broadcaster must have partner or affiliate status.")
-    check("affiliate" in tab.reward_notes[1].text(), "Twitch's refusal is shown next to the list")
-    tab2 = app.SettingsTab(lambda: None, lambda: False)
-    tab2.refresh_rewards()
-    check("start the helper" in tab2.reward_notes[0].text(), "helper not running: says so")
+    check("affiliate" in red.note.text(), "Twitch's refusal is shown on the tab")
+    red2 = app.RedeemsTab(app.SettingsTab(lambda: None), lambda: False, lambda arg: False)
+    red2.refresh()
+    check("Start the helper" in red2.note.text(), "helper not running: says so")
+    red2.test("suslov")
+    check("Start the helper" in red2.note.text(), "Test without the helper: says so")
+
+    # Test buttons send the registry's ids (the Zone one queues like a real redemption)
+    for b in red.findChildren(app.QPushButton):
+        if b.text() == "Test":
+            b.click()
+    check(tests == ["speech", "redeem"] + [r.id for r in app.redeems.TRIGGERS], f"Test buttons send {tests}")
+
+    # a setting changed by hand in the file while the window was open is kept by Save
+    text = settings.read_text(encoding="utf-8").replace("PLAYER_NAME=", "PLAYER_NAME=Бродяга")
+    settings.write_text(text, encoding="utf-8")
+    red.pickers["suslov"].set_setting_value("Шари")
+    tab.save()
+    saved = settings.read_text(encoding="utf-8")
+    check("PLAYER_NAME=Бродяга" in saved and "TWITCH_SUSLOV_REWARD=Шари" in saved, "Save merges with the file on disk")
 
     # Twitch: the list, and its refusal
     tw = Twitch("id", "Скажи", tmp / "tok.json", lambda *a: None, lambda m: None, source="chat")

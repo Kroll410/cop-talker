@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "companion"))
 import talker  # noqa: E402
 from twitch import Twitch  # noqa: E402
+from redeem_checks import check_redeem  # noqa: E402  (tools/redeem_checks.py)
 
 ok = True
 
@@ -32,12 +33,8 @@ tw.on_redemption({"id": "r2", "user_name": "Olia", "reward": {"id": "y", "title"
 tw.on_redemption({"id": "r3", "user_name": "Ivan", "reward": {"id": "z", "title": "Щось інше"}})
 check(got == [("anekdot", "Vasyl"), ("suslov", "Olia")], f"routed by title, once each: {got}")
 
-# the app wires the setting into the triggers, next to the others
-src = (ROOT / "companion" / "talker.py").read_text(encoding="utf-8")
-check("(TWITCH_ANEKDOT_REWARD, self.on_anekdot)" in src, "TWITCH_ANEKDOT_REWARD routes to on_anekdot")
-app = (ROOT / "companion" / "app.py").read_text(encoding="utf-8")
-pick = app.split("REWARD_PICK = {", 1)[1].split("}", 1)[0]
-check('"TWITCH_ANEKDOT_REWARD"' in pick and '("Анекдот", "anekdot"' in app, "the window: a reward picker and a test button")
+# one entry in companion/redeems.py: Twitch routing, the Redeems tab's picker and Test, the helper's test command
+check_redeem(check, "anekdot", "TWITCH_ANEKDOT_REWARD", "on_anekdot")
 ini = (ROOT / "settings.example.ini").read_text(encoding="utf-8")
 check("\nTWITCH_ANEKDOT_REWARD=" in ini.replace("\r\n", "\n"), "settings.example.ini has it (empty = off)")
 check(all("TWITCH_ANEKDOT_REWARD" in (ROOT / r).read_text(encoding="utf-8") for r in ("README.md", "README.en.md")),

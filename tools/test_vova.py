@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "companion"))
 import talker  # noqa: E402
 from twitch import Twitch  # noqa: E402
+from redeem_checks import check_redeem  # noqa: E402  (tools/redeem_checks.py)
 
 ok = True
 
@@ -43,10 +44,8 @@ src = (ROOT / "companion" / "twitch.py").read_text(encoding="utf-8")
 check('"POST", "/channel_points/custom_rewards"' not in src and '"DELETE"' not in src,
       "the app never creates or deletes a reward")
 
-# the helper builds its triggers from both settings (an empty one is left out)
-tk = (ROOT / "companion" / "talker.py").read_text(encoding="utf-8")
-check("(TWITCH_VOVA_REWARD, self.on_vova)" in tk and 'os.environ.get("TWITCH_VOVA_REWARD"' in tk,
-      "TWITCH_VOVA_REWARD is read and routed to on_vova")
+# one entry in companion/redeems.py: Twitch routing, the Redeems tab's picker and Test, the helper's test command
+check_redeem(check, "vova", "TWITCH_VOVA_REWARD", "on_vova")
 
 # at once, straight to the game, not through the Zone queue
 sent = []
@@ -89,12 +88,6 @@ what = talker.Talker.zone_what(t, "vova", {})
 check("Вова Віст" in what and "військові" in what and "except the player" in what,
       "the men around are told who he is and what he does")
 
-# the window: label, reward picker, test button
-app = (ROOT / "companion" / "app.py").read_text(encoding="utf-8")
-check('"TWITCH_VOVA_REWARD": "«Вова Віст» reward"' in app, "a readable label in Settings")
-check(re.search(r"REWARD_PICK = \{[^}]*\"TWITCH_VOVA_REWARD\"", app), "picked from the channel's own rewards")
-check('("Вова Віст", "vova",' in app, "a test button on the Twitch tab")
-check("elif arg == \"vova\":" in tk, "the helper takes the button")
 ini = (ROOT / "settings.example.ini").read_text(encoding="utf-8")
 check(re.search(r"^TWITCH_VOVA_REWARD=$", ini, re.M), "in settings.example.ini, empty (off)")
 for readme in ("README.md", "README.en.md"):
