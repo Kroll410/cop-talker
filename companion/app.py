@@ -413,8 +413,9 @@ class Window(QMainWindow):
             "word for word, one starting with <b>%</b> is retold by the NPC his own way. Other messages are "
             "ignored (Settings → TWITCH_UNPREFIXED). A random NPC near you says it; nobody near? It waits.</li>"
             "<li><b>reward</b> mode (Settings → Twitch → TWITCH_SOURCE): make a channel-points reward with a "
-            "message on Twitch yourself and pick it in Settings → TWITCH_REWARD (the app never creates rewards); "
-            "needs Affiliate/Partner.</li></ol>")
+            "message on Twitch yourself and pick it in Settings → TWITCH_REWARD; needs Affiliate/Partner.</li>"
+            "<li>The app never adds rewards to your channel. Every reward (the speech one, the Zone one) is made "
+            "by you on Twitch; one that isn't there is named in the status above, and the app waits for it.</li></ol>")
         guide.setOpenExternalLinks(True)
         guide.setWordWrap(True)
         guide.setMaximumWidth(760)
@@ -422,12 +423,6 @@ class Window(QMainWindow):
         tl.addWidget(self.twitch_queue)
         tl.addLayout(auth_row)
         tl.addWidget(self.twitch_code)
-        # Rewards an older version created on the channel: shown with a Delete button (asks first)
-        self.app_rewards_box = QWidget()
-        self.app_rewards_row = QHBoxLayout(self.app_rewards_box)
-        self.app_rewards_row.setContentsMargins(0, 0, 0, 0)
-        self.app_rewards_box.hide()
-        tl.addWidget(self.app_rewards_box)
         # Zone reward: what's waiting (rolled at redemption) and debug buttons that need no real redemption
         zone_title = QLabel("Zone events (Settings → TWITCH_ZONE_REWARD)")
         self.zone_queue = QLabel("Nothing waiting")
@@ -532,33 +527,6 @@ class Window(QMainWindow):
         self.proc.write(b"rewards" + bytes([10]))
         return True
 
-    def show_app_rewards(self, rewards):
-        while self.app_rewards_row.count():
-            w = self.app_rewards_row.takeAt(0).widget()
-            if w:
-                w.deleteLater()
-        if not rewards:
-            self.app_rewards_box.hide()
-            return
-        note = QLabel("Made by StalkerTalker on your channel:")
-        note.setObjectName("secondary")
-        self.app_rewards_row.addWidget(note)
-        for rw in rewards:
-            btn = QPushButton(f"Delete «{rw['title']}»")
-            btn.setToolTip("Removes this reward from your Twitch channel (asks first)")
-            btn.clicked.connect(lambda _=False, r=rw: self.delete_app_reward(r))
-            self.app_rewards_row.addWidget(btn)
-        self.app_rewards_row.addStretch()
-        self.app_rewards_box.show()
-
-    def delete_app_reward(self, rw):
-        if not self.proc:
-            return
-        sure = QMessageBox.question(self, "StalkerTalker", f"Delete the reward «{rw['title']}» from your Twitch "
-                                    "channel? Redemptions waiting in its queue go with it. This can't be undone.")
-        if sure == QMessageBox.Yes:
-            self.proc.write(f"delete_reward {rw['id']}".encode() + bytes([10]))
-
     def send_zone(self, arg):
         """Debug: tell the helper to fire (or queue) a Zone event without a real Twitch redemption."""
         if not self.proc:
@@ -634,11 +602,6 @@ class Window(QMainWindow):
         elif kind == "REWARDS":
             try:
                 self.settings.set_rewards(json.loads(text))
-            except ValueError:
-                pass
-        elif kind == "APP_REWARDS":
-            try:
-                self.show_app_rewards(json.loads(text))
             except ValueError:
                 pass
         elif kind == "REWARDS_ERROR":

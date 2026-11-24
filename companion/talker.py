@@ -3868,21 +3868,6 @@ class Talker:
             report("REWARDS", json.dumps(self.twitch.list_rewards(), ensure_ascii=False))
         except Exception as exc:
             report("REWARDS_ERROR", str(exc)[:160])
-        self.report_app_rewards()
-
-    def report_app_rewards(self):
-        """Rewards an older version of this app created on the channel: the window offers to delete them."""
-        try:
-            report("APP_REWARDS", json.dumps(self.twitch.app_rewards() if self.twitch else [], ensure_ascii=False))
-        except Exception as exc:
-            log(f"Twitch: couldn't list the app's own rewards ({str(exc)[:100]})")
-
-    def delete_app_reward(self, reward_id):
-        if not self.twitch:
-            return
-        why = self.twitch.delete_reward(reward_id)
-        log("Twitch: reward deleted from the channel" if why is None else f"Twitch: reward not deleted ({why})")
-        self.report_app_rewards()
 
     def report_zone(self, force=False):
         """The queue for the window's Twitch tab (each line: what, whose, in how many seconds)."""
@@ -4207,8 +4192,6 @@ class Talker:
                         break
                     if line.strip() == "rewards":  # the window's Refresh next to a reward title
                         threading.Thread(target=self.report_rewards, daemon=True).start()
-                    if line.startswith("delete_reward "):  # the window's Delete, after the user confirmed it
-                        threading.Thread(target=self.delete_app_reward, args=(line.split()[1],), daemon=True).start()
                     if line.startswith("zone"):  # the window's debug buttons
                         arg = line.split()[-1]
                         if arg == "redeem":  # as if a viewer redeemed it: queued like a real one, PDA notice

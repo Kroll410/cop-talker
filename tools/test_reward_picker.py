@@ -3,6 +3,7 @@ Offline: the Settings tab (offscreen Qt) on a copy of settings.example.ini, the 
 Twitch's reward list with a fake Helix."""
 import io
 import json
+import re
 import os
 import shutil
 import sys
@@ -88,71 +89,58 @@ try:
 
     # the helper's side: "rewards" -> @REWARDS / @REWARDS_ERROR
     t = talker.Talker.__new__(talker.Talker)
-    t.twitch = types.SimpleNamespace(list_rewards=lambda: ["A", "Зона"], app_rewards=lambda: [])
+    t.twitch = types.SimpleNamespace(list_rewards=lambda: ["A", "Зона"])
     out = io.StringIO()
     with redirect_stdout(out):
         t.report_rewards()
         t.twitch = None
         t.report_rewards()
     lines = out.getvalue().splitlines()
-    check(lines == ['@REWARDS|["A", "Зона"]', "@APP_REWARDS|[]", "@REWARDS_ERROR|Twitch is off (TWITCH_ENABLED, "
+    check(lines == ['@REWARDS|["A", "Зона"]', "@REWARDS_ERROR|Twitch is off (TWITCH_ENABLED, "
                     "TWITCH_CLIENT_ID)"], f"helper answers {lines}")
 
-    # the app never creates a reward; one an older version made can be deleted, only after a yes
+    # the app never adds (or deletes) a reward on the channel: only reads them and subscribes to redemptions
     calls = []
 
     def fake_helix(method, path, **kw):
-        calls.append((method, kw.get("params", {}).get("only_manageable_rewards"), kw.get("params", {}).get("id")))
+        calls.append((method, path))
         if method == "GET":
-            data = [{"id": "old", "title": "Скажи через сталкера"}]
-            if not kw["params"].get("only_manageable_rewards"):
-                data.append({"id": "z", "title": "Зона"})
-            return types.SimpleNamespace(status_code=200, json=lambda: {"data": data}, text="")
-        if method == "DELETE":
-            return types.SimpleNamespace(status_code=204, json=lambda: {}, text="")
-        return types.SimpleNamespace(status_code=500, json=lambda: {}, text="")
+            return types.SimpleNamespace(status_code=200, json=lambda: {"data": [{"id": "h", "title": "Hydrate"}]},
+                                         text="")
+        return types.SimpleNamespace(status_code=202, json=lambda: {}, text="")
 
     logs = []
-    tw = Twitch("id", "Мій редім", tmp / "tok.json", lambda *a: None, logs.append, source="reward")
-    tw.user_id, tw.helix = "42", fake_helix
-    tw.find_reward()
-    check(not any(c[0] == "POST" for c in calls) and tw.reward_id is None and "no reward" in logs[-1],
-          f"a missing speech reward is not created {calls} {logs[-1:]}")
+    for source in ("reward", "chat"):
+        tw = Twitch("id", "Мій редім", tmp / "tok.json", lambda *a: None, logs.append, source=source,
+                    zone_title="Зона", on_zone=lambda *a: None)
+        tw.user_id, tw.channel_id, tw.helix = "42", "42", fake_helix
+        tw.find_reward()
+        tw.find_zone_reward()
+        tw.list_rewards()
+        tw.subscribe("session")
     tw2 = Twitch("id", "", tmp / "tok.json", lambda *a: None, logs.append, source="reward")
     tw2.user_id, tw2.helix = "42", fake_helix
-    calls.clear()
     tw2.find_reward()
-    check(not calls and tw2.reward_id is None, "no speech reward set: Twitch isn't even asked")
+    tw2.subscribe("session")
+    reward_writes = [c for c in calls if c[1].startswith("/channel_points/custom_rewards") and c[0] != "GET"
+                     and not c[1].endswith("/redemptions")]
+    check(calls and not reward_writes, f"no reward is ever created or deleted ({len(calls)} calls, writes: {reward_writes})")
+    check(any("no reward «Мій редім»" in m and "create it on Twitch" in m for m in logs)
+          and any("no reward «Зона»" in m for m in logs), "a missing reward is named, to make by hand on Twitch")
+    src = "".join((ROOT / "companion" / f).read_text(encoding="utf-8") for f in ("twitch.py", "talker.py", "app.py"))
+    check(not re.search(r'"(POST|DELETE|PUT)",\s*"/channel_points/custom_rewards"', src),
+          "the code has no call that adds or deletes a reward")
+    check("delete_reward" not in src and "APP_REWARDS" not in src, "no Delete button or its code is left")
     spoken = []
-    tw.on_message = lambda u, t, r: spoken.append(t)
+    tw = Twitch("id", "Мій редім", tmp / "tok.json", lambda u, t, r: spoken.append(t), logs.append, source="reward")
+    tw.user_id, tw.helix = "42", fake_helix
+    tw.find_reward()
     tw.on_redemption({"id": "1", "user_name": "A", "reward": {"id": "q", "title": "мій редім"}, "user_input": "$hi"})
     tw.on_redemption({"id": "2", "user_name": "B", "reward": {"id": "w", "title": "Hydrate"}, "user_input": "$no"})
     check(spoken == ["$hi"], f"made on Twitch later: matched by its title, other rewards ignored {spoken}")
     tw2.on_message = lambda u, t, r: spoken.append(t)
     tw2.on_redemption({"id": "3", "user_name": "C", "reward": {"id": "w", "title": "Hydrate"}, "user_input": "$x"})
     check(spoken == ["$hi"], "no speech reward set: no reward is spoken")
-    check(tw.app_rewards() == [{"id": "old", "title": "Скажи через сталкера"}], "the app's own old reward is found")
-    check(tw.delete_reward("old") is None and ("DELETE", None, "old") in calls, "delete removes it on Twitch")
-
-    sent_in = []
-    me = types.SimpleNamespace(settings=tab, proc=types.SimpleNamespace(write=lambda b: sent_in.append(b)))
-    from PySide6.QtWidgets import QHBoxLayout, QMessageBox, QWidget
-    me.app_rewards_box = QWidget()
-    me.app_rewards_row = QHBoxLayout(me.app_rewards_box)
-    me.show_app_rewards = lambda r: app.Window.show_app_rewards(me, r)
-    me.delete_app_reward = lambda r: app.Window.delete_app_reward(me, r)
-    app.Window.handle_report(me, "APP_REWARDS|" + json.dumps([{"id": "old", "title": "Скажи через сталкера"}]))
-    btns = [me.app_rewards_row.itemAt(i).widget() for i in range(me.app_rewards_row.count())]
-    btns = [b for b in btns if b is not None and b.text().startswith("Delete")]
-    check(len(btns) == 1 and "Скажи через сталкера" in btns[0].text(), "the window offers Delete for it")
-    QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.No)
-    btns[0].click()
-    check(not sent_in, "answered No: nothing is deleted")
-    QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
-    btns[0].click()
-    check(sent_in == [b"delete_reward old\n"], f"answered Yes: the helper is told to delete it {sent_in}")
-    app.Window.handle_report(me, "APP_REWARDS|[]")
-    check(me.app_rewards_box.isHidden(), "nothing left: the row goes")
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 

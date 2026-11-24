@@ -80,7 +80,7 @@ In chat:
 
 A viewer gets linked to a free NPC within `TWITCH_DISTANCE`. If that NPC dies, the link goes; the viewer gets a new one with his next message. Nobody's NPC is taken from them. Links can be turned off (`TWITCH_LINKS=0`): then any NPC nearby says each message, with no nick labels.
 
-The app never creates rewards: you make them on Twitch. In `TWITCH_SOURCE=reward` mode the NPC says the text of the reward you pick in `TWITCH_REWARD`. If a reward made by an older version ("Скажи через сталкера") is still on the channel, the Twitch tab shows a **Delete** button for it (it asks first).
+The app never adds rewards to your channel: you make them on Twitch. In `TWITCH_SOURCE=reward` mode the NPC says the text of the reward you pick in `TWITCH_REWARD`. If the reward you picked isn't on the channel, the Twitch tab's status says so, and the app waits until you make it.
 
 **The "Zone" reward** (Affiliate/Partner). Make a channel-points reward on Twitch with no message and pick it in Settings → `TWITCH_ZONE_REWARD` (**Refresh** lists all the channel's rewards; you can also type the title). Each redemption rolls a random event right away, and the PDA shows that the Zone heard it. The first event in the queue happens at once; each one behind it waits 5-7 minutes after the one before (`TWITCH_ZONE_GAP`). With `0`, every event happens at once:
 - **Дар Зони** (gift, 25%): a random item of the game (no quest items) in your backpack;

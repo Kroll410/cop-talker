@@ -1,5 +1,6 @@
 """Twitch bridge: chat messages (testing) or a channel-points reward with a message go to an NPC in the game.
-The app never creates rewards: the channel owner makes them on Twitch and picks their titles in Settings.
+The app never creates or deletes rewards (no POST/DELETE on custom_rewards): the channel owner makes them on
+Twitch and picks their titles in Settings; a missing one is reported by name and listened for by title.
 A second reward, made by the channel owner on Twitch (no message), can trigger a random Zone event (zone_title).
 
 Sign-in uses Twitch's device code flow (you open a link and type a code, no password ever reaches this app).
@@ -150,27 +151,6 @@ class Twitch:
         self.log(f"Twitch: no reward «{self.reward_title}» on your channel yet (create it on Twitch, with a "
                  "message). Listening for it by title.")
 
-    def app_rewards(self):
-        """Rewards this app created earlier (only those can be deleted from here): [{"id", "title"}]."""
-        if not self.user_id:
-            return []
-        r = self.helix("GET", "/channel_points/custom_rewards",
-                       params={"broadcaster_id": self.user_id, "only_manageable_rewards": "true"})
-        return [{"id": rw["id"], "title": rw["title"]} for rw in r.json().get("data", [])] if r.status_code == 200 else []
-
-    def delete_reward(self, reward_id):
-        """Remove a reward this app created from the channel. Returns None if done, else Twitch's reason."""
-        r = self.helix("DELETE", "/channel_points/custom_rewards",
-                       params={"broadcaster_id": self.user_id, "id": reward_id})
-        if r.status_code == 204:
-            if reward_id == self.reward_id:
-                self.reward_id, self.reward_owned = None, False
-            return None
-        try:
-            return (r.json().get("message") or r.text)[:150]
-        except ValueError:
-            return r.text[:150] or str(r.status_code)
-
     def list_rewards(self):
         """Titles of all channel-points rewards of your channel (made here or by hand on Twitch)."""
         if not self.user_id:
@@ -267,14 +247,16 @@ class Twitch:
                         if not moved:  # after a session_reconnect the subscription comes along by itself
                             self.subscribe(msg["payload"]["session"]["id"])
                         moved = False
-                        zone = f", Zone reward «{self.zone_title}»" if self.zone_title else ""
+                        zone = (f", Zone reward «{self.zone_title}»" + ("" if self.zone_reward_id else
+                                " (not on the channel: create it on Twitch)")) if self.zone_title else ""
                         if self.source == "chat":
                             self.status = (f"on: {self.login}, reading chat of #{self.channel} ($ word for word, "
                                            f"% retold){zone}")
                             self.log(f"Twitch connected as {self.login}, reading #{self.channel}: "
                                      "$message = said word for word, %message = retold by the NPC.")
                         else:
-                            say = f"reward «{self.reward_title}»" if self.reward_title else "no speech reward"
+                            say = (f"reward «{self.reward_title}»" + ("" if self.reward_id else
+                                   " (not on the channel: create it on Twitch)")) if self.reward_title else "no speech reward"
                             self.status = f"on: {self.login}, {say}{zone}"
                             self.log(f"Twitch connected ({self.login}). {say[0].upper() + say[1:]}{zone}.")
                     elif kind == "notification":
