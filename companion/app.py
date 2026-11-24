@@ -130,6 +130,8 @@ NICE = {"STALKER_DIR": "Game folder", "SPEAK_MODE": "Speaking", "PTT_KEY": "Push
         "LLM_PROVIDER": "Replies by", "CLAUDE_MODEL": "Claude model", "CLAUDE_CLI": "Claude Code program",
         "GEMINI_MODEL": "Gemini model", "GEMINI_SMART_MODEL": "Gemini model for deals",
         "STT_MODELS": "Speech recognition"}
+# Reward titles: picked from the channel's own rewards (Refresh asks Twitch), or typed.
+REWARD_PICK = {"TWITCH_REWARD", "TWITCH_ZONE_REWARD"}
 WIDE = {"STALKER_DIR", "PLAYER_BIO", "NEWS_FEEDS", "CLAUDE_CLI", "TWITCH_BLOCKED", "STT_MODELS"}
 
 
@@ -176,10 +178,12 @@ def log_html(line):
 class SettingsTab(QWidget):
     """A form built from settings.ini: the comment above each key becomes its hint."""
 
-    def __init__(self, on_save):
+    def __init__(self, on_save, on_refresh_rewards=None):
         super().__init__()
         self.on_save = on_save
+        self.on_refresh_rewards = on_refresh_rewards or (lambda: False)
         self.fields = {}
+        self.reward_notes = []
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 12, 0, 0)
         outer.setSpacing(12)
@@ -224,7 +228,15 @@ class SettingsTab(QWidget):
                 key, value = key.strip(), value.strip()
                 text = " ".join(hint)
                 m = re.search(r"options:\s*([\w, ]+)$", text)
-                if m:
+                if key in REWARD_PICK:
+                    field = QComboBox()
+                    field.setEditable(True)  # Twitch not reachable now: the title can still be typed
+                    if key == "TWITCH_ZONE_REWARD":
+                        field.addItem("")  # empty = off
+                    if value:
+                        field.addItem(value)
+                    field.setCurrentText(value)
+                elif m:
                     field = QComboBox()
                     field.addItems([o.strip() for o in m.group(1).split(",") if o.strip()])
                     field.setCurrentText(value)
@@ -232,7 +244,8 @@ class SettingsTab(QWidget):
                 else:
                     field = QLineEdit(value)
                 field.setToolTip(text)
-                field.setMaximumWidth(240 if isinstance(field, QComboBox) else 720 if key in WIDE else 360)
+                field.setMaximumWidth(360 if key in REWARD_PICK else 240 if isinstance(field, QComboBox)
+                                      else 720 if key in WIDE else 360)
                 label = QLabel(NICE.get(key, key.replace("_", " ").capitalize()))
                 label.setToolTip(text)
                 label.setContentsMargins(0, 6, 0, 0)  # level with the text inside the field
@@ -241,7 +254,22 @@ class SettingsTab(QWidget):
                 box = QVBoxLayout(cell)
                 box.setContentsMargins(0, 0, 0, 0)
                 box.setSpacing(4)
-                box.addWidget(field)
+                if key in REWARD_PICK:
+                    pick = QHBoxLayout()
+                    pick.setSpacing(8)
+                    pick.addWidget(field, 1)
+                    refresh = QPushButton("Refresh")
+                    refresh.setToolTip("Ask Twitch for all channel-points rewards of your channel")
+                    refresh.clicked.connect(self.refresh_rewards)
+                    pick.addWidget(refresh)
+                    status = QLabel("")
+                    status.setObjectName("muted")
+                    pick.addWidget(status)
+                    pick.addStretch()
+                    self.reward_notes.append(status)
+                    box.addLayout(pick)
+                else:
+                    box.addWidget(field)
                 note = QLabel((html.escape(text.rstrip(". ")) + "&nbsp;&nbsp;" if text else "")
                               + span(key, "#6f6c5f", mono=True))
                 note.setObjectName("muted")
@@ -251,6 +279,32 @@ class SettingsTab(QWidget):
                 self.fields[key] = field
                 self.loaded[key] = self.value(key)  # what the form showed, to know later what YOU changed
                 hint = []
+
+    def refresh_rewards(self):
+        self.reward_status("asking Twitch..." if self.on_refresh_rewards() else
+                           "start the helper and sign in to Twitch first")
+
+    def reward_status(self, text):
+        for note in self.reward_notes:
+            note.setText(text)
+
+    def set_rewards(self, titles):
+        """The channel's rewards from Twitch: offered in every reward picker; the chosen title stays."""
+        for key in REWARD_PICK:
+            f = self.fields.get(key)
+            if not isinstance(f, QComboBox):
+                continue
+            current = f.currentText()
+            f.blockSignals(True)
+            f.clear()
+            if key == "TWITCH_ZONE_REWARD":
+                f.addItem("")
+            f.addItems(titles)
+            if current and current not in titles:
+                f.addItem(current)  # not on the channel (yet): keep it, the helper creates or waits for it
+            f.setCurrentText(current)
+            f.blockSignals(False)
+        self.reward_status(f"{len(titles)} reward(s) on the channel" if titles else "no rewards on the channel yet")
 
     def value(self, key):
         f = self.fields[key]
@@ -395,7 +449,7 @@ class Window(QMainWindow):
 
         tabs = QTabWidget()
         tabs.addTab(self.log, "Log")
-        self.settings = SettingsTab(self.restart)
+        self.settings = SettingsTab(self.restart, self.request_rewards)
         tabs.addTab(self.settings, "Settings")
         tabs.addTab(twitch, "Twitch")
 
@@ -466,6 +520,13 @@ class Window(QMainWindow):
         QTimer.singleShot(60000, self.auth_done)  # never stay stuck if something goes wrong
         self.restart()
 
+    def request_rewards(self):
+        """Ask the helper (it holds the Twitch sign-in) for the channel's rewards; the answer is @REWARDS."""
+        if not self.proc:
+            return False
+        self.proc.write(b"rewards" + bytes([10]))
+        return True
+
     def send_zone(self, arg):
         """Debug: tell the helper to fire (or queue) a Zone event without a real Twitch redemption."""
         if not self.proc:
@@ -534,8 +595,17 @@ class Window(QMainWindow):
             if not text.startswith("sign in"):  # keep the friendlier sign-in hint while waiting
                 self.twitch_state.setText(f"Twitch: {text}")
             if text.startswith("on"):
+                if not getattr(self, "rewards_asked", False):  # fill the reward pickers once Twitch is on
+                    self.rewards_asked = self.request_rewards()
                 self.twitch_code.hide()
                 self.auth_done()
+        elif kind == "REWARDS":
+            try:
+                self.settings.set_rewards(json.loads(text))
+            except ValueError:
+                pass
+        elif kind == "REWARDS_ERROR":
+            self.settings.reward_status(text)
         elif kind == "ZONE":
             try:
                 rows = json.loads(text)

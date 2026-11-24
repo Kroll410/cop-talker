@@ -153,6 +153,22 @@ class Twitch:
             self.log(f"Twitch: couldn't find or create reward «{self.reward_title}» ({r.text[:120]}). "
                      "Listening to all rewards with a message.")
 
+    def list_rewards(self):
+        """Titles of all channel-points rewards of your channel (made here or by hand on Twitch)."""
+        if not self.user_id:
+            raise RuntimeError("Twitch is not signed in yet")
+        r = self.helix("GET", "/channel_points/custom_rewards", params={"broadcaster_id": self.user_id})
+        if r.status_code != 200:
+            try:
+                why = r.json().get("message") or r.text
+            except ValueError:
+                why = r.text
+            if r.status_code == 401 and "channel:read:redemptions" not in self.scopes.split():
+                # chat mode without a Zone reward: this sign-in may not read rewards yet
+                why = "type the reward title and Save: Twitch then asks to read rewards, and Refresh works"
+            raise RuntimeError(f"Twitch: {why[:150]}")
+        return [rw["title"] for rw in r.json().get("data", [])]
+
     def find_zone_reward(self):
         """The Zone reward is made by hand on Twitch: we only find its id to listen to it."""
         r = self.helix("GET", "/channel_points/custom_rewards", params={"broadcaster_id": self.user_id})

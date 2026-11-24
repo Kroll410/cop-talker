@@ -3857,6 +3857,16 @@ class Talker:
                 self.zone_fired = None
                 self.report_zone(force=True)
 
+    def report_rewards(self):
+        """All rewards of the channel, for the window's reward pickers."""
+        if not self.twitch:
+            report("REWARDS_ERROR", "Twitch is off (TWITCH_ENABLED, TWITCH_CLIENT_ID)")
+            return
+        try:
+            report("REWARDS", json.dumps(self.twitch.list_rewards(), ensure_ascii=False))
+        except Exception as exc:
+            report("REWARDS_ERROR", str(exc)[:160])
+
     def report_zone(self, force=False):
         """The queue for the window's Twitch tab (each line: what, whose, in how many seconds)."""
         rows = self.zone.summary(time.time())
@@ -4178,6 +4188,8 @@ class Talker:
                 for line in sys.stdin:
                     if line.strip() == "quit":
                         break
+                    if line.strip() == "rewards":  # the window's Refresh next to a reward title
+                        threading.Thread(target=self.report_rewards, daemon=True).start()
                     if line.startswith("zone"):  # the window's debug buttons
                         arg = line.split()[-1]
                         if arg == "redeem":  # as if a viewer redeemed it: queued, PDA notice, 5-7 min
