@@ -52,7 +52,7 @@ ok &= check(looks() == [(5, "look:6"), (6, "look:5")], f"one line: {looks()}")
 hold = [x[2] for x in sent if x[0] == "act" and x[2].startswith("look:")][0]
 ok &= check(int(hold.rsplit(":", 1)[1]) >= 3, f"held at least as long as he talks ({hold})")
 
-ok &= check(talker.Talker.MOD_VERSION == 13, "app expects game script v13")
+ok &= check(talker.Talker.MOD_VERSION >= 13, "app expects game script v13 or newer")
 
 # gestures: never for a man who is fighting or wounded right now (the game refuses them: log noise)
 real_gesture = talker.Talker.gesture

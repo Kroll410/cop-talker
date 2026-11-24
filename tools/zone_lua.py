@@ -1,0 +1,208 @@
+"""Runs talker_bridge.script in LuaJIT with engine stubs and checks the "zone" inbox line (used by test_zone.py).
+Prints one line per check ("ok   ..." / "FAIL ...") and OK or FAIL at the end."""
+import json
+import sys
+
+import lupa.luajit21 as lj
+
+script, root = sys.argv[1], sys.argv[2].replace("\\", "/") + "/"
+L = lj.LuaRuntime()
+L.execute(r'''
+ROOT = ...
+now_ms = 1000
+news, created, follows, hits = {}, {}, {}, {}
+function time_global() return now_ms end
+function getFS() return { update_path = function() return ROOT .. "talker/" end } end
+function vector()
+  local v = { x = 0, y = 0, z = 0 }
+  function v:set(x, y, z) if type(x) == "table" then self.x, self.y, self.z = x.x, x.y, x.z else self.x, self.y, self.z = x, y, z end; return self end
+  function v:sub(o) self.x, self.y, self.z = self.x - o.x, self.y - o.y, self.z - o.z; return self end
+  function v:distance_to(o) return math.sqrt((self.x - o.x)^2 + (self.z - o.z)^2) end
+  return v
+end
+objs = {}
+function make(id, name, x)
+  local o = { _id = id, _alive = true, _x = x or 0, _rel = 1, health = 1 }
+  function o:id() return self._id end; function o:alive() return self._alive end
+  function o:position() return vector():set(self._x, 0, 0) end; function o:character_name() return name end
+  function o:character_community() return "stalker" end; function o:character_rank() return 300 end
+  function o:name() return "st_" .. id end; function o:relation() return self._rel end
+  function o:set_relation(r) self._rel = r end; function o:force_set_goodwill(g) self._gw = g end
+  function o:best_enemy() return nil end; function o:sound_prefix() return "" end; function o:clsid() return 1 end
+  function o:active_item() return nil end; function o:get_current_outfit() return nil end
+  function o:make_object_visible_somewhen() end
+  function o:hit(h) table.insert(hits, self._id .. ":" .. tostring(h.draftsman and h.draftsman:id())) end
+  function o:level_vertex_id() return 1 end; function o:game_vertex_id() return 7 end
+  function o:give_game_news(caption, text) table.insert(news, caption .. "|" .. text) end
+  objs[id] = o; return o end
+game_object = { enemy = 3, friend = 0, neutral = 1 }
+db = { storage = {} }
+db.actor = make(0, "Player", 0); db.actor.health = 1
+-- sections the "game" has: a few items, two stalkers, two mutant kinds
+HAVE = { medkit = true, af_medusa = true, wpn_ak74 = true, sim_default_bandit_2 = true, sim_default_duty_1 = true,
+  tushkano_normal = true, gigant_strong = true }
+function system_ini() return {
+  section_exist = function(_, s) return HAVE[s] == true end,
+  r_string = function(_, s, k) return "name_" .. s end } end
+game = { translate_string = function(s) return "T(" .. s .. ")" end }
+next_id = 100
+function alife() return {
+  object = function(_, id) return objs[id] and { force_set_goodwill = function() end } or nil end,
+  create = function(_, sec, pos, lv, gv, parent)
+    next_id = next_id + 1
+    table.insert(created, { id = next_id, sec = sec, lv = lv, gv = gv, parent = parent, d = pos:distance_to(db.actor:position()) })
+    return { id = next_id }
+  end } end
+-- walkable vertices: vertex N stands N metres east of the player
+level = { object_by_id = function(id) return objs[id] end, name = function() return "zaton" end,
+  vertex_in_direction = function(from, dir, dist) return 1000 + math.floor(dist) end,
+  vertex_position = function(lv) return vector():set(lv - 1000, 0, 0) end }
+function hit() return {} end
+hit = setmetatable({ wound = 5 }, { __call = function() return {} end })
+news_manager = { relocate_item = function(_, dir, sec) table.insert(news, "relocate|" .. dir .. "|" .. sec) end }
+xr_sound = { set_sound_play = function() end }
+xr_logic = { configure_schemes = function(npc) table.insert(follows, npc:id()) end, activate_by_section = function() end }
+modules = { stype_stalker = 1 }
+function IsStalker(o) return o and o._id ~= 0 end
+function IsMonster() return false end
+DIK_keys = setmetatable({}, { __index = function() return 1 end })
+function ini_file() return nil end
+xr_wounded = { is_wounded = function() return false end }
+callback = { key_press = 1, hit = 2, key_release = 3 }
+db.actor.set_callback = function() end
+function get_hud() return nil end
+''', root)
+L.execute(open(script, encoding="utf-8").read())
+
+ok = True
+
+
+def check(cond, what):
+    global ok
+    ok &= bool(cond)
+    print(("ok   " if cond else "FAIL ") + what)
+
+
+def inbox(text):
+    with open(root + "talker/inbox.txt", "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text + "\n")
+
+
+def step(ms):
+    L.execute(f"now_ms = now_ms + {ms}; pcall(update, 0)")
+
+
+def events():
+    try:
+        with open(root + "talker/events.jsonl", encoding="utf-8") as fh:
+            out = [json.loads(line) for line in fh if line.strip()]
+    except OSError:
+        return []
+    open(root + "talker/events.jsonl", "w").close()
+    return out
+
+
+def take(name):
+    out = list(L.eval(name).values())
+    L.execute(f"{name} = {{}}")
+    return out
+
+
+step(300)
+events()
+
+# gift: one existing item into the player's backpack, PDA line with its name first
+inbox("zone||gift|Дар Зони (viewer)|Зона бажає милосердя — отримано {item} в рюкзак")
+step(300)
+c, n, ev = take("created"), take("news"), events()
+check(len(c) == 1 and c[0]["parent"] == 0 and c[0]["sec"] in ("medkit", "af_medusa", "wpn_ak74"),
+      f"gift: one real item made in the backpack {[dict(x) for x in c]}")
+sec = c[0]["sec"] if c else "?"
+check(n and n[0] == f"Дар Зони (viewer)|Зона бажає милосердя — отримано T(name_{sec}) в рюкзак",
+      f"gift: PDA line with the item's name comes first {n}")
+check(any(x.startswith("relocate|in|") for x in n), "gift: the game's 'item received' notice")
+check(ev and ev[0]["type"] == "zone_done" and ev[0]["ok"] and ev[0]["section"] == sec, f"gift: zone_done ok {ev}")
+
+# life: ally, 15-30 m away, follows, wears the nickname, the app hears zone_spawned
+inbox("zone||life:ally:Viewer_1|Життя для Зони (Viewer_1)|Зона грає з життям як заманеться — Viewer_1 тепер іде з тобою")
+step(300)
+c, n, ev = take("created"), take("news"), events()
+check(len(c) == 1 and c[0]["sec"] in ("sim_default_bandit_2", "sim_default_duty_1") and c[0]["parent"] is None,
+      f"life: one stalker of a section the game has {[dict(x) for x in c]}")
+check(c and 15 <= c[0]["d"] <= 30, f"life: 15-30 m away ({c[0]['d'] if c else '?'} m)")
+check(n and n[0].startswith("Життя для Зони (Viewer_1)|Зона грає"), f"life: PDA line {n}")
+check(ev and ev[0]["ok"] and ev[0]["side"] == "ally" and ev[0]["nick"] == "Viewer_1", f"life: zone_done {ev}")
+ally = c[0]["id"] if c else 0
+step(300)  # not in the game yet: nothing happens, nothing breaks
+L.execute(f"o = make({ally}, 'Новенький', 20); db.storage[{ally}] = {{ object = o }}")
+step(300)  # seen
+check(not take("follows"), "life: waits a moment after he comes into the game")
+step(1200)
+check(take("follows") == [ally], "life: the ally follows the player")
+check(L.eval(f"objs[{ally}]._rel") == 0, "life: the ally is a friend")
+check(L.eval(f"twitch_links[{ally}]") == "Viewer_1", "life: he wears the viewer's nickname")
+ev = events()
+check(ev and ev[0]["type"] == "zone_spawned" and ev[0]["id"] == ally and ev[0]["nick"] == "Viewer_1"
+      and ev[0]["npc"]["name"] == "Новенький", f"life: the app hears zone_spawned {ev}")
+
+# life: enemy
+inbox("zone||life:enemy:Bad_Guy|c|t")
+step(300)
+c = take("created")
+events()
+foe = c[0]["id"]
+L.execute(f"o = make({foe}, 'Злий', 25); db.storage[{foe}] = {{ object = o }}")
+step(300)
+step(1200)
+check(L.eval(f"objs[{foe}]._rel") == 3 and not take("follows"), "life: the enemy hates the player and doesn't follow")
+check(L.eval(f"twitch_links[{foe}]") == "Bad_Guy", "life: the enemy wears the nickname too")
+events()
+take("news")
+
+# child: n mutants of the first section the game has, 25-50 m away, each provoked once in the game
+inbox("zone||child:4:tushkano_weak,tushkano_normal|Дитя Зони (v)|Зона народжує... тушкан (4)")
+step(300)
+c, n, ev = take("created"), take("news"), events()
+check(len(c) == 4 and all(x["sec"] == "tushkano_normal" for x in c), f"child: 4 tushkans {[x['sec'] for x in c]}")
+check(all(25 <= x["d"] <= 50 for x in c), f"child: 25-50 m away {[x['d'] for x in c]}")
+check(n and n[0] == "Дитя Зони (v)|Зона народжує... тушкан (4)", f"child: PDA line {n}")
+check(ev and ev[0]["ok"] and ev[0]["count"] == 4, f"child: zone_done {ev}")
+for x in c:
+    L.execute(f"o = make({x['id']}, 'тушкан', 30); db.storage[{x['id']}] = {{ object = o }}")
+step(300)
+step(1200)
+h = take("hits")
+check(sorted(h) == sorted(f"{x['id']}:0" for x in c), f"child: each one goes for the player {h}")
+
+# a mutant the game doesn't have: nothing made, the app is told why
+inbox("zone||child:3:chimera_normal,chimera_strong|c|t")
+step(300)
+c, n, ev = take("created"), take("news"), events()
+check(not c and not n and ev and not ev[0]["ok"] and ev[0]["reason"] == "no mutant", f"child: missing section {ev}")
+
+# count is clamped to 1..10
+inbox("zone||child:99:gigant_strong|c|t")
+step(300)
+c = take("created")
+events()
+take("news")
+check(len(c) == 10, f"child: at most 10 ({len(c)})")
+
+# nonsense: reported, nothing made
+inbox("zone||boom|c|t")
+step(300)
+ev = events()
+check(not take("created") and ev and not ev[0]["ok"] and ev[0]["reason"] == "unknown", f"unknown event {ev}")
+
+# a man who never comes into the game is forgotten after 30 s (no endless checking)
+inbox("zone||life:ally:Ghost|c|t")
+step(300)
+take("created")
+events()
+step(31000)
+try:
+    errors = open(root + "talker/bridge_errors.log", encoding="utf-8").read()
+except OSError:
+    errors = ""
+check("never came into the game" in errors, "a spawn that never comes into the game is forgotten after 30 s")
+print("OK" if ok else "FAIL")

@@ -4,6 +4,7 @@ Runs companion/talker.py as a child process and reads its output, so a crash in 
 the window down, and "Save and restart" applies new settings at once.
 """
 import html
+import json
 import os
 import re
 import subprocess
@@ -125,6 +126,7 @@ NICE = {"STALKER_DIR": "Game folder", "SPEAK_MODE": "Speaking", "PTT_KEY": "Push
         "TWITCH_QUEUE_MAX": "Messages waiting, at most", "TWITCH_REWARD": "Reward title", "TWITCH_COST": "Reward cost",
         "TWITCH_UNPREFIXED": "Messages without $ or %", "TWITCH_DISTANCE": "NPC distance",
         "TWITCH_SHOW_NAME": "Nick in the PDA", "TWITCH_LINKS": "Viewer keeps his NPC", "TWITCH_BLOCKED": "Blocked words",
+        "TWITCH_ZONE_REWARD": "Zone reward title", "TWITCH_ZONE_GAP": "Minutes between Zone events",
         "LLM_PROVIDER": "Replies by", "CLAUDE_MODEL": "Claude model", "CLAUDE_CLI": "Claude Code program",
         "GEMINI_MODEL": "Gemini model", "GEMINI_SMART_MODEL": "Gemini model for deals",
         "STT_MODELS": "Speech recognition"}
@@ -367,6 +369,27 @@ class Window(QMainWindow):
         tl.addWidget(self.twitch_queue)
         tl.addLayout(auth_row)
         tl.addWidget(self.twitch_code)
+        # Zone reward: what's waiting (rolled at redemption) and debug buttons that need no real redemption
+        zone_title = QLabel("Zone events (Settings → TWITCH_ZONE_REWARD)")
+        self.zone_queue = QLabel("Nothing waiting")
+        self.zone_queue.setObjectName("secondary")
+        self.zone_queue.setWordWrap(True)
+        zone_row = QHBoxLayout()
+        for text, arg, tip in (
+                ("Redeem (debug)", "redeem", "As if a viewer redeemed the Zone reward: rolled now, a PDA notice, "
+                                             "goes off after the usual 5-7 minutes."),
+                ("Now: Дар", "gift", "A random item in your backpack, right now."),
+                ("Now: Життя", "life", "A random stalker, friend or enemy, right now."),
+                ("Now: Дитя", "child", "Mutants come for you, right now."),
+                ("Now: random", "any", "One of the three, rolled like a real redemption, right now.")):
+            btn = QPushButton(text)
+            btn.setToolTip(tip)
+            btn.clicked.connect(lambda _=False, a=arg: self.send_zone(a))
+            zone_row.addWidget(btn)
+        zone_row.addStretch()
+        tl.addWidget(zone_title)
+        tl.addWidget(self.zone_queue)
+        tl.addLayout(zone_row)
         tl.addWidget(guide)
         tl.addStretch()
 
@@ -443,6 +466,13 @@ class Window(QMainWindow):
         QTimer.singleShot(60000, self.auth_done)  # never stay stuck if something goes wrong
         self.restart()
 
+    def send_zone(self, arg):
+        """Debug: tell the helper to fire (or queue) a Zone event without a real Twitch redemption."""
+        if not self.proc:
+            self.zone_queue.setText("Start the helper first (Start button at the top).")
+            return
+        self.proc.write(f"zone {arg}\n".encode())
+
     def auth_done(self):
         self.auth_btn.setEnabled(True)
         self.auth_btn.setText("Authorize Twitch app")
@@ -506,6 +536,16 @@ class Window(QMainWindow):
             if text.startswith("on"):
                 self.twitch_code.hide()
                 self.auth_done()
+        elif kind == "ZONE":
+            try:
+                rows = json.loads(text)
+            except ValueError:
+                rows = []
+            lines = []
+            for r in rows:
+                when = "now (test)" if r.get("test") else "in %d:%02d" % divmod(r["in"], 60)
+                lines.append(f"{when} — {r['label']} ({r['user']})")
+            self.zone_queue.setText("\n".join(lines) if lines else "Nothing waiting")
         elif kind == "TWITCH_QUEUE":
             self.twitch_queue.setText(f"Waiting messages: {text}")
         elif kind == "TWITCH_CODE":

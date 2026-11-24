@@ -247,6 +247,9 @@ TWITCH_SHOW_NAME = os.environ.get("TWITCH_SHOW_NAME", "1") != "0"
 # Each viewer keeps his own NPC (nick label in game, "%%" lets go); 0 = any NPC nearby says each message
 TWITCH_LINKS = os.environ.get("TWITCH_LINKS", "1") != "0"
 TWITCH_BLOCKED = [w.strip().lower() for w in os.environ.get("TWITCH_BLOCKED", "").split(",") if w.strip()]
+# Zone events: the title of a channel-points reward you made on Twitch (no message). Empty = off.
+TWITCH_ZONE_REWARD = os.environ.get("TWITCH_ZONE_REWARD", "").strip()
+TWITCH_ZONE_GAP = os.environ.get("TWITCH_ZONE_GAP", "5-7")  # minutes between two Zone events
 
 LEVELS = {"zaton": "Затон", "jupiter": "Юпітер", "pripyat": "Прип'ять",
           "labx8": "лабораторія X8", "jupiter_underground": "шляхопровід «Прип'ять-1»"}
@@ -1305,6 +1308,7 @@ from usage import Usage  # noqa: E402  (companion/usage.py)
 from news import DEFAULT_FEEDS, News  # noqa: E402  (companion/news.py)
 from lore import lore_for  # noqa: E402  (companion/lore.py)
 import prices  # noqa: E402  (companion/prices.py: the game's own trade prices)
+import zone  # noqa: E402  (companion/zone.py: the Twitch Zone reward's random events)
 
 USAGE = Usage(ROOT / "usage.json")
 
@@ -2892,11 +2896,14 @@ class Talker:
         self.load_links()        # kept in twitch_links.json across restarts
         self.left_npc = {}       # viewer -> the NPC he just left with "%%"
         self.next_link_sync = 0.0
+        self.zone = zone.ZoneQueue(ROOT / "zone_queue.json", zone.parse_gap(TWITCH_ZONE_GAP))
+        self.zone_reported = None
         if TWITCH_ENABLED:
             from twitch import Twitch
             self.twitch = Twitch(TWITCH_CLIENT_ID, TWITCH_REWARD, ROOT / "twitch_token.json", self.on_twitch, log,
                                  reward_cost=TWITCH_COST, on_code=lambda url, code: report("TWITCH_CODE", f"{url}|{code}"),
-                                 source=TWITCH_SOURCE, channel=TWITCH_CHANNEL)
+                                 source=TWITCH_SOURCE, channel=TWITCH_CHANNEL,
+                                 zone_title=TWITCH_ZONE_REWARD, on_zone=self.on_zone)
             self.twitch.start()
 
     def show_line(self, npc_id, text, pda_text=None):
@@ -3058,7 +3065,7 @@ class Talker:
             elif what == "ptt_up":
                 self.ptt_up.set()
 
-    MOD_VERSION = 13  # must match MOD_VERSION in talker_bridge.script
+    MOD_VERSION = 14  # must match MOD_VERSION in talker_bridge.script
 
     def check_mod_version(self, state):
         """The game reads its scripts only when a save loads: warn if it still runs an older copy."""
@@ -3100,6 +3107,7 @@ class Talker:
         for key, npc_id in list(self.twitch_links.items()):
             if npc_id in dead:
                 del self.twitch_links[key]
+                self.zone_links.discard(key)
                 self.save_links()
                 self.game.send("link", npc_id, "")
                 log(f"Twitch: {self.twitch_names.get(key, key)}'s NPC died: unlinked")
@@ -3800,6 +3808,63 @@ class Talker:
         log(f"Twitch: {user} -> «{text}» ({mode}, waiting: {len(self.twitch_queue)})")
         report("TWITCH_QUEUE", str(len(self.twitch_queue)))
 
+    # ------------------------------------------------------------ Zone reward (companion/zone.py)
+    def on_zone(self, user, redemption=None):
+        """A viewer redeemed the Zone reward: rolled now, done when its turn comes (5-7 min apart)."""
+        item = self.zone.add(user, time.time())
+        wait = max(1, round((item["due"] - time.time()) / 60))
+        log(f"Twitch: {user} redeemed the Zone reward -> {zone.label(item)} (in ~{wait} min, "
+            f"waiting: {len(self.zone.items)})")
+        self.game.send("twitch", None, f"{zone.clean_nick(user)}: Зона почула тебе. Щось станеться за ~{wait} хв")
+        self.report_zone(force=True)
+
+    def zone_test(self, kind=None):
+        """The window's test button: a Zone event at once, without a redemption."""
+        who = (self.twitch.login if self.twitch and self.twitch.login else None) or "test"
+        item = self.zone.add_test(who, time.time(), kind if kind in zone.TITLES else None)
+        log(f"Zone test: {zone.label(item)}")
+        self.report_zone(force=True)
+
+    def zone_tick(self, state):
+        """Fire the Zone event whose time has come, while the game runs and the player is alive."""
+        if not self.zone.items or (state.get("mod_version") or 0) < 14:
+            return
+        if (state.get("actor") or {}).get("health", 1) <= 0:
+            return
+        item = self.zone.pop_due(time.time())
+        if not item:
+            return
+        what, caption, text = zone.command(item)
+        self.zone_fired = item
+        log(f"Zone event for {item['user']}: {zone.label(item)}")
+        self.game.send("zone", None, f"{what}|{caption}|{text}")
+        self.report_zone(force=True)
+
+    def on_zone_results(self, events):
+        """The game's answer: a man to link to the viewer's nickname, or a failure to try again."""
+        for ev in events:
+            if ev.get("type") == "zone_spawned" and ev.get("nick"):
+                npc = dict(ev.get("npc") or {}, id=ev.get("id"))
+                self.link_viewer(ev["nick"], npc, from_zone=True)
+            elif ev.get("type") == "zone_done":
+                item = getattr(self, "zone_fired", None)
+                if ev.get("ok"):
+                    log(f"  Zone: done ({ev.get('section')}{' x' + str(ev['count']) if ev.get('count') else ''})")
+                elif item and self.zone.retry(item, time.time()):
+                    log(f"  Zone: the game couldn't do it ({ev.get('reason')}), trying again in 30 s")
+                else:
+                    log(f"  Zone: the game couldn't do it ({ev.get('reason')}), given up")
+                self.zone_fired = None
+                self.report_zone(force=True)
+
+    def report_zone(self, force=False):
+        """The queue for the window's Twitch tab (each line: what, whose, in how many seconds)."""
+        rows = self.zone.summary(time.time())
+        text = json.dumps(rows, ensure_ascii=False)
+        if force or rows or self.zone_reported != text:
+            self.zone_reported = text
+            report("ZONE", text)
+
     def twitch_speak(self, state):
         """Give the oldest viewer message to a random NPC nearby; if nobody is around, wait for one."""
         if not self.twitch_queue or self.busy.locked() or self.recording:
@@ -3830,7 +3895,9 @@ class Talker:
             free = [n for n in others if n.get("id") not in taken]
             left = self.left_npc.pop(user.lower(), None)  # after "%%": a different man, if there is one
             free = [n for n in free if n.get("id") != left] or free
-            if free:  # new viewer, or his man is gone (left, dead, wounded): link him to a free one
+            if user.lower() in self.zone_links:  # his Zone man is away: borrow someone, he stays linked
+                npc = random.choice(free or others) if (free or others) else None
+            elif free:  # new viewer, or his man is gone (left, dead, wounded): link him to a free one
                 npc = random.choice(free)
                 self.link_viewer(user, npc)
             else:  # every man around already speaks for a viewer: borrow one for this message, take nobody's man
@@ -3843,6 +3910,9 @@ class Talker:
         """The viewer asked to be let go from his NPC ("%%"): the label goes, and his next message is said by
         another man (not the one he just left, if anyone else is free)."""
         key = user.lower()
+        if key in self.zone_links:
+            log(f"Twitch: {user} asked to unlink, but his man came from the Zone: he stays until he dies")
+            return
         old = self.twitch_links.pop(key, None)
         if old is None:
             log(f"Twitch: {user} asked to unlink, but has no NPC")
@@ -3852,8 +3922,9 @@ class Talker:
         self.game.send("link", old, "")
         log(f"Twitch: {user} unlinked from his NPC; the next message gets another one")
 
-    def link_viewer(self, user, npc):
-        """From now on this viewer's messages go through this NPC; looking at him in game shows [nickname]."""
+    def link_viewer(self, user, npc, from_zone=False):
+        """From now on this viewer's messages go through this NPC; looking at him in game shows [nickname].
+        from_zone: the man the Zone reward made for him; that link lasts until the man dies."""
         key = user.lower()
         old = self.twitch_links.pop(key, None)
         if old is not None and old != npc["id"]:
@@ -3861,6 +3932,11 @@ class Talker:
         for other, npc_id in list(self.twitch_links.items()):  # one viewer per NPC
             if npc_id == npc["id"]:
                 del self.twitch_links[other]
+                self.zone_links.discard(other)
+        if from_zone:
+            self.zone_links.add(key)
+        else:
+            self.zone_links.discard(key)
         self.twitch_links[key] = npc["id"]
         self.twitch_names[key] = user
         self.save_links()
@@ -3875,29 +3951,34 @@ class Talker:
             data = json.loads(self.LINKS_FILE.read_text(encoding="utf-8"))
             self.twitch_links = {k: int(v["id"]) for k, v in data.items()}
             self.twitch_names = {k: v.get("nick", k) for k, v in data.items()}
-        except (OSError, ValueError, KeyError, TypeError):
-            self.twitch_links, self.twitch_names = {}, {}
+            self.zone_links = {k for k, v in data.items() if v.get("zone")}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            self.twitch_links, self.twitch_names, self.zone_links = {}, {}, set()
 
     def save_links(self):
         try:
             self.LINKS_FILE.write_text(json.dumps(
-                {k: {"id": i, "nick": self.twitch_names.get(k, k)} for k, i in self.twitch_links.items()},
+                {k: dict({"id": i, "nick": self.twitch_names.get(k, k)}, **({"zone": True} if k in self.zone_links else {}))
+                 for k, i in self.twitch_links.items()},
                 ensure_ascii=False, indent=1), encoding="utf-8")
         except OSError as exc:
             log(f"Twitch links not saved: {exc}")
 
     def sync_links(self, state):
         """The game forgets the labels when a save loads: show them again for linked NPCs it doesn't know."""
-        if not TWITCH_LINKS:  # links off: take down labels left from before (a save keeps them)
+        # links off: only the Zone's men keep their nickname; other labels left from before go (a save keeps them)
+        links = self.twitch_links if TWITCH_LINKS else {
+            k: i for k, i in self.twitch_links.items() if k in self.zone_links}
+        if not TWITCH_LINKS:
             for npc_id in state.get("twitch_links") or []:
-                self.game.send("link", int(npc_id), "")
-            return
-        if time.time() < self.next_link_sync or not self.twitch_links:
+                if int(npc_id) not in links.values():
+                    self.game.send("link", int(npc_id), "")
+        if time.time() < self.next_link_sync or not links:
             return
         self.next_link_sync = time.time() + 5
         shown = {str(i) for i in state.get("twitch_links") or []}
         alive = {n.get("id") for n in state.get("npcs", []) if isinstance(n, dict)}
-        for key, npc_id in self.twitch_links.items():
+        for key, npc_id in links.items():
             if npc_id in alive and str(npc_id) not in shown:
                 self.game.send("link", npc_id, self.twitch_names.get(key, key))
 
@@ -4097,6 +4178,12 @@ class Talker:
                 for line in sys.stdin:
                     if line.strip() == "quit":
                         break
+                    if line.startswith("zone"):  # the window's debug buttons
+                        arg = line.split()[-1]
+                        if arg == "redeem":  # as if a viewer redeemed it: queued, PDA notice, 5-7 min
+                            self.on_zone((self.twitch.login if self.twitch and self.twitch.login else None) or "test")
+                        else:  # "zone gift|life|child|any": at once
+                            self.zone_test(arg)
                 else:
                     return  # no window attached (console run): Ctrl+C as usual
             except (OSError, ValueError):
@@ -4137,6 +4224,7 @@ class Talker:
                     self.on_game_results(events, self.game.state())
                     if self.twitch_links:
                         self.unlink_dead(events)
+                    self.on_zone_results(events)
                     for ev in events:
                         if ev.get("type") == "order":
                             self.on_order(ev)
@@ -4152,6 +4240,9 @@ class Talker:
                     self.check_healed(state)
                     self.check_mod_version(state)
                     self.sync_links(state)
+                    if self.game_is_live(state):
+                        self.zone_tick(state)
+                    self.report_zone()
                 live = state and self.game_is_live(state) and not self.busy.locked() and not self.recording
                 if CHAT_ONLY:
                     if live:

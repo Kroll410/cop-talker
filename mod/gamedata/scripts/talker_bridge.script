@@ -5,7 +5,7 @@
 --   inbox.txt    - written by the companion: "say|<npc_id>|<text>" lines; read and deleted here
 -- Every entry point is called through pcall from the hooks, so a bug here never crashes the game.
 
-MOD_VERSION = 13  -- the companion app checks this, so a game still running an old copy of this script is noticed
+MOD_VERSION = 14  -- the companion app checks this, so a game still running an old copy of this script is noticed
 local dir = nil
 local next_state_write = 0
 local next_inbox_check = 0
@@ -902,6 +902,181 @@ local function show_line(npc_id, text, caption, showtime)
 	db.actor:give_game_news(caption, text, icon, 0, showtime or 9000, 0)
 end
 
+-- ------------------------------------------------------------- Zone events (a Twitch channel-points reward)
+-- The app rolls the event and sends "zone||<what>|<PDA caption>|<PDA text>"; the PDA line comes first, then:
+--   gift                  a random item of the game lands in your backpack ("{item}" in the text = its name)
+--   life:ally:<nick>      a random stalker (any faction, rank, gear) appears 15-30 m away and follows you
+--   life:enemy:<nick>     ... and attacks you; both wear the viewer's nickname until they die
+--   child:<n>:<s1>,<s2>   n mutants (of whichever of these sections the game has) 25-50 m away, coming for you
+-- Only sections the game really has are used; quest and dev items are never in the list.
+local ZONE_ITEMS = {
+	"wpn_pm", "wpn_pb", "wpn_fort", "wpn_hpsa", "wpn_walther", "wpn_usp", "wpn_colt1911", "wpn_desert_eagle",
+	"wpn_sig220", "wpn_beretta", "wpn_bm16", "wpn_toz34", "wpn_wincheaster1300", "wpn_spas12", "wpn_protecta",
+	"wpn_ak74u", "wpn_ak74", "wpn_abakan", "wpn_groza", "wpn_val", "wpn_vintorez", "wpn_l85", "wpn_lr300",
+	"wpn_sig550", "wpn_g36", "wpn_fn2000", "wpn_mp5", "wpn_svd", "wpn_svu", "wpn_gauss", "wpn_rg-6", "wpn_rpg7",
+	"wpn_pkm", "wpn_addon_scope", "wpn_addon_scope_susat", "wpn_addon_silencer", "wpn_addon_grenade_launcher",
+	"wpn_addon_grenade_launcher_m203", "grenade_f1", "grenade_rgd5",
+	"ammo_9x18_fmj", "ammo_9x18_pmm", "ammo_9x19_fmj", "ammo_9x19_pbp", "ammo_11.43x23_fmj", "ammo_11.43x23_hydro",
+	"ammo_12x70_buck", "ammo_12x76_zhekan", "ammo_12x76_dart", "ammo_5.45x39_fmj", "ammo_5.45x39_ap",
+	"ammo_5.56x45_ss190", "ammo_5.56x45_ap", "ammo_7.62x54_7h1", "ammo_7.62x54_ap", "ammo_7.62x54_7h14",
+	"ammo_9x39_pab9", "ammo_9x39_ap", "ammo_pkm_100", "ammo_vog-25", "ammo_m209", "ammo_og-7b", "ammo_gauss",
+	"novice_outfit", "stalker_outfit", "scientific_outfit", "specops_outfit", "military_outfit", "dolg_outfit",
+	"dolg_heavy_outfit", "svoboda_light_outfit", "svoboda_heavy_outfit", "exo_outfit", "cs_heavy_outfit",
+	"helm_respirator", "helm_hardhat", "helm_protective", "helm_tactic", "helm_battle",
+	"af_medusa", "af_vyvert", "af_gravi", "af_gold_fish", "af_blood", "af_mincer_meat", "af_soul",
+	"af_electra_sparkler", "af_electra_flash", "af_electra_moonlight", "af_dummy_battery", "af_dummy_dummy",
+	"af_fireball", "af_cristall", "af_cristall_flower", "af_night_star", "af_eye", "af_fire", "af_glass", "af_ice",
+	"af_baloon", "af_compass", "af_fuzz_kolobok", "af_dummy_glassbeads", "af_dummy_pellicle",
+	"bread", "kolbasa", "conserva", "vodka", "energy_drink", "medkit", "medkit_army", "medkit_scientic", "bandage",
+	"antirad", "drug_booster", "drug_coagulant", "drug_psy_blockade", "drug_antidot", "drug_radioprotector",
+	"drug_anabiotic", "detector_simple", "detector_advanced", "detector_elite", "detector_scientific",
+}
+local ZONE_PEOPLE = { "stalker", "bandit", "duty", "freedom", "killer", "military", "monolith", "ecolog", "zombied" }
+local zone_pending = {}  -- id of a man or mutant just created -> what to do once he is in the game
+local zone_seeded = false
+
+local function section_ok(sec)
+	local ok, yes = pcall(function() return system_ini():section_exist(sec) end)
+	return ok and yes and true or false
+end
+
+local function pick_existing(list)
+	local have = {}
+	for _, sec in ipairs(list) do
+		if section_ok(sec) then table.insert(have, sec) end
+	end
+	return have[1] and have[math.random(#have)] or nil
+end
+
+-- A walkable spot min_d..max_d metres from you, in a random direction (a wall in the way: a closer one).
+local function zone_point(min_d, max_d)
+	local actor = db.actor
+	local apos, from = actor:position(), actor:level_vertex_id()
+	local best, best_lv, best_d = nil, nil, 3
+	for _ = 1, 12 do
+		local a = math.random() * 2 * math.pi
+		local lv = level.vertex_in_direction(from, vector():set(math.cos(a), 0, math.sin(a)),
+			min_d + math.random() * (max_d - min_d))
+		if lv and lv ~= from and lv < 4294967295 then  -- -1: no vertex there (never ask its position)
+			local pos = level.vertex_position(lv)
+			local d = pos:distance_to(apos)
+			if d >= min_d then return pos, lv end
+			if d > best_d then best, best_lv, best_d = pos, lv, d end
+		end
+	end
+	return best, best_lv
+end
+
+local function zone_spawn(sec, pos, lv, pending)
+	local se = alife():create(sec, pos, lv, db.actor:game_vertex_id())
+	pending.till = time_global() + 30000
+	zone_pending[se.id] = pending
+	return se.id
+end
+
+-- A tiny hit from you: a mutant that hasn't seen you yet knows now who to go for.
+local function zone_provoke(obj)
+	local h = hit()
+	h.draftsman = db.actor
+	h.type = hit.wound
+	h.power = 0.001
+	h.impulse = 0
+	h.direction = vector():set(obj:position()):sub(db.actor:position())
+	obj:hit(h)
+end
+
+local function zone_event(text)
+	if not zone_seeded then zone_seeded = true; math.randomseed(os.time()) end
+	local what, caption, msg = string.match(text, "^([^|]*)|([^|]*)|(.*)$")
+	what = what or text
+	local function say(item)
+		if not msg or msg == "" then return end
+		local line = string.gsub(msg, "{item}", (string.gsub(item or "", "%%", "%%%%")))
+		show_line(nil, line, caption, 12000)
+		pcall(xr_sound.set_sound_play, db.actor:id(), "pda_tips")
+	end
+	local done = { type = "zone_done", what = what, ok = false }
+	if what == "gift" then
+		local sec = pick_existing(ZONE_ITEMS)
+		if not sec then done.reason = "no item"; return append_event(done) end
+		say(item_title(sec) or sec)
+		local actor = db.actor
+		alife():create(sec, actor:position(), actor:level_vertex_id(), actor:game_vertex_id(), actor:id())
+		pcall(news_manager.relocate_item, actor, "in", sec)
+		done.ok, done.section = true, sec
+		return append_event(done)
+	end
+	local side, nick = string.match(what, "^life:(%a+):(.*)$")
+	if side == "ally" or side == "enemy" then
+		local people = {}
+		for _, f in ipairs(ZONE_PEOPLE) do
+			for rank = 0, 4 do table.insert(people, "sim_default_" .. f .. "_" .. rank) end
+		end
+		local sec = pick_existing(people)
+		local pos, lv = zone_point(15, 30)
+		if not sec or not pos then done.reason = sec and "no place" or "no stalker"; return append_event(done) end
+		say()
+		done.id = zone_spawn(sec, pos, lv, { what = "life", side = side, nick = nick })
+		done.ok, done.section, done.side, done.nick = true, sec, side, nick
+		return append_event(done)
+	end
+	local n, list = string.match(what, "^child:(%d+):(.+)$")
+	if n then
+		local secs = {}
+		for sec in string.gmatch(list, "[^,]+") do table.insert(secs, sec) end
+		local sec = pick_existing(secs)
+		if not sec then done.reason = "no mutant"; return append_event(done) end
+		local spots = {}
+		for _ = 1, math.max(1, math.min(10, tonumber(n))) do
+			local pos, lv = zone_point(25, 50)
+			if pos then table.insert(spots, { pos, lv }) end
+		end
+		if not spots[1] then done.reason = "no place"; return append_event(done) end
+		say()
+		for _, s in ipairs(spots) do zone_spawn(sec, s[1], s[2], { what = "child" }) end
+		done.ok, done.section, done.count = true, sec, #spots
+		return append_event(done)
+	end
+	done.reason = "unknown"
+	append_event(done)
+end
+
+-- Men and mutants from zone_event come into the game a moment later: then they get their side and nickname.
+local function update_zone()
+	local now = time_global()
+	for id, p in pairs(zone_pending) do
+		local obj = level.object_by_id(id)
+		local st = db.storage[id]
+		if obj and st and st.object then
+			if not p.seen then
+				p.seen = now  -- his own logic starts first; ours goes on top of it a second later
+			elseif now - p.seen > 1000 then
+				zone_pending[id] = nil
+				if p.what == "life" then
+					if p.side == "ally" then
+						pcall(function() obj:set_relation(game_object.friend, db.actor) end)
+						pcall(function() obj:force_set_goodwill(1000, db.actor) end)
+						pcall(function() alife():object(id):force_set_goodwill(1000, db.actor:id()) end)
+						local okf, err = pcall(start_follow, obj)
+						if not okf then log_error("zone follow: " .. tostring(err)) end
+					else
+						add_grudge(obj, db.actor)
+					end
+					if p.nick ~= "" then twitch_links[id] = p.nick; link_shown = false end
+					append_event({ type = "zone_spawned", id = id, nick = p.nick, side = p.side, npc = npc_info(obj) })
+				else
+					pcall(function() obj:set_relation(game_object.enemy, db.actor) end)
+					local okp, err = pcall(zone_provoke, obj)
+					if not okp then log_error("zone provoke: " .. tostring(err)) end
+				end
+			end
+		elseif now > p.till then
+			zone_pending[id] = nil
+			log_error("zone: " .. tostring(id) .. " never came into the game")
+		end
+	end
+end
+
 local inbox_line  -- one inbox line; defined right after read_inbox
 
 local function read_inbox()
@@ -938,6 +1113,12 @@ inbox_line = function(line)  -- declared above read_inbox
 	elseif kind == "act" then
 		local ok, err = pcall(do_action, tonumber(id), text)
 		if not ok then log_error("act " .. text .. ": " .. tostring(err)) end
+	elseif kind == "zone" then
+		local ok, err = pcall(zone_event, text)
+		if not ok then
+			log_error("zone " .. text .. ": " .. tostring(err))
+			append_event({ type = "zone_done", what = string.match(text, "^[^|]*"), ok = false, reason = tostring(err) })
+		end
 	end
 end
 
@@ -1154,6 +1335,10 @@ function update(delta)
 		if not ok then log_error("link label: " .. tostring(err)); link_shown = nil end
 	end
 	if next(contracts) or next(grudges) then pcall(update_contracts) end
+	if next(zone_pending) then
+		local okz, errz = pcall(update_zone)
+		if not okz then log_error("zone: " .. tostring(errz)) end
+	end
 	if next(looks) then
 		local okl, errl = pcall(update_looks)
 		if not okl then log_error("looks: " .. tostring(errl)) end

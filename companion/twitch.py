@@ -1,4 +1,5 @@
 """Twitch bridge: chat messages (testing) or a channel-points reward with a message go to an NPC in the game.
+A second reward, made by the channel owner on Twitch (no message), can trigger a random Zone event (zone_title).
 
 Sign-in uses Twitch's device code flow (you open a link and type a code, no password ever reaches this app).
 Events come over EventSub WebSocket, so no public server or open port is needed.
@@ -26,10 +27,16 @@ def channel_login(text):
 
 class Twitch:
     def __init__(self, client_id, reward_title, token_file: Path, on_message, log, reward_cost=500,
-                 on_code=None, source="reward", channel=""):
+                 on_code=None, source="reward", channel="", zone_title="", on_zone=None):
         self.client_id = client_id
         self.source = source if source in SCOPES else "reward"
         self.scopes = SCOPES[self.source]
+        self.zone_title = (zone_title or "").strip()  # the Zone reward's title on Twitch; empty = off
+        self.on_zone = on_zone or (lambda user, redemption: None)
+        self.zone_reward_id = None
+        self.zone_seen = []  # redemption ids already handed on (two subscriptions may both deliver one)
+        if self.zone_title and "channel:read:redemptions" not in self.scopes.split():
+            self.scopes += " channel:read:redemptions"  # chat mode too: the Zone reward is on your own channel
         self.channel = channel_login(channel)  # chat mode: whose chat to read (empty = your own)
         self.channel_id = None
         self.reward_title = reward_title
@@ -146,6 +153,23 @@ class Twitch:
             self.log(f"Twitch: couldn't find or create reward «{self.reward_title}» ({r.text[:120]}). "
                      "Listening to all rewards with a message.")
 
+    def find_zone_reward(self):
+        """The Zone reward is made by hand on Twitch: we only find its id to listen to it."""
+        r = self.helix("GET", "/channel_points/custom_rewards", params={"broadcaster_id": self.user_id})
+        for rw in r.json().get("data", []) if r.status_code == 200 else []:
+            if rw["title"].strip().lower() == self.zone_title.lower():
+                self.zone_reward_id = rw["id"]
+                return
+        self.zone_reward_id = None
+        self.log(f"Twitch: no reward «{self.zone_title}» on your channel yet (create it on Twitch, no message "
+                 "needed). Listening for it by title.")
+
+    def is_zone(self, ev):
+        reward = ev.get("reward") or {}
+        if self.zone_reward_id and reward.get("id") == self.zone_reward_id:
+            return True
+        return bool(self.zone_title) and (reward.get("title") or "").strip().lower() == self.zone_title.lower()
+
     def finish(self, redemption, spoken=True):
         """Mark the redemption done (or refund it). Works only for rewards this app created."""
         if not self.reward_owned or not redemption:
@@ -175,10 +199,15 @@ class Twitch:
                 "transport": {"method": "websocket", "session_id": session_id}})
             if r.status_code not in (200, 202, 409):  # 409: already subscribed, which is fine
                 raise RuntimeError(f"Twitch subscribe failed: {r.text[:200]}")
-            return
+        else:
+            self.subscribe_redemptions(session_id, self.reward_id)
+        if self.zone_title:
+            self.subscribe_redemptions(session_id, self.zone_reward_id)
+
+    def subscribe_redemptions(self, session_id, reward_id):
         condition = {"broadcaster_user_id": self.user_id}
-        if self.reward_id:
-            condition["reward_id"] = self.reward_id
+        if reward_id:
+            condition["reward_id"] = reward_id
         r = self.helix("POST", "/eventsub/subscriptions", json={
             "type": "channel.channel_points_custom_reward_redemption.add", "version": "1",
             "condition": condition, "transport": {"method": "websocket", "session_id": session_id}})
@@ -204,24 +233,25 @@ class Twitch:
                         if not moved:  # after a session_reconnect the subscription comes along by itself
                             self.subscribe(msg["payload"]["session"]["id"])
                         moved = False
+                        zone = f", Zone reward «{self.zone_title}»" if self.zone_title else ""
                         if self.source == "chat":
-                            self.status = f"on: {self.login}, reading chat of #{self.channel} ($ word for word, % retold)"
+                            self.status = (f"on: {self.login}, reading chat of #{self.channel} ($ word for word, "
+                                           f"% retold){zone}")
                             self.log(f"Twitch connected as {self.login}, reading #{self.channel}: "
                                      "$message = said word for word, %message = retold by the NPC.")
                         else:
-                            self.status = f"on: {self.login}, reward «{self.reward_title}»"
+                            self.status = f"on: {self.login}, reward «{self.reward_title}»{zone}"
                             self.log(f"Twitch connected ({self.login}). Waiting for «{self.reward_title}».")
                     elif kind == "notification":
                         ev = msg["payload"]["event"]
-                        if self.source == "chat":
+                        sub_type = (msg["payload"].get("subscription") or {}).get("type", "")
+                        if sub_type.startswith("channel.channel_points"):
+                            self.on_redemption(ev)
+                        elif self.source == "chat":
                             text = ((ev.get("message") or {}).get("text") or "").strip()
                             user = ev.get("chatter_user_name") or ev.get("chatter_user_login")
                             if text:
                                 self.on_message(user, text, None)
-                        else:
-                            text = (ev.get("user_input") or "").strip()
-                            if text:
-                                self.on_message(ev.get("user_name") or ev.get("user_login"), text, ev)
                     elif kind == "session_reconnect":
                         url, moved = msg["payload"]["session"]["reconnect_url"], True
                         break
@@ -229,6 +259,22 @@ class Twitch:
                 pass  # no keepalive in time: reconnect
             finally:
                 ws.close()
+
+    def on_redemption(self, ev):
+        user = ev.get("user_name") or ev.get("user_login")
+        if self.is_zone(ev):
+            if ev.get("id") in self.zone_seen:
+                return
+            self.zone_seen = (self.zone_seen + [ev.get("id")])[-200:]
+            self.on_zone(user, ev)
+            return
+        if self.source != "reward":
+            return
+        if self.reward_id and (ev.get("reward") or {}).get("id") != self.reward_id:
+            return  # another reward of the channel (the Zone subscription may listen to all of them)
+        text = (ev.get("user_input") or "").strip()
+        if text:
+            self.on_message(user, text, ev)
 
     def run(self):
         """Keeps trying: no internet at start, a dropped connection or a Twitch outage only delay it."""
@@ -245,6 +291,8 @@ class Twitch:
                     self.find_channel()
                 else:
                     self.find_reward()
+                if self.zone_title:
+                    self.find_zone_reward()
                 wait = 10
                 while not self.stop.is_set():
                     self.listen()
