@@ -388,7 +388,8 @@ def is_cyrillic(text):
 # never for the Monolith (solemn) or the scientists.
 SLUR_COMMON = {"bandit"}
 SLUR_NEVER = {"monolith", "ecolog", "zombied"}
-SLUR_RARE_CHANCE = 0.15  # share of an ordinary stalker's lines where a slur may stay in
+SLUR_RARE_CHANCE = 0.10  # share of an ordinary stalker's lines that get a slur (rolled per line, before he speaks)
+SLUR_TURN = {}  # NPC id -> this line of his was rolled to have a slur (set with his prompt, read by has_slur)
 SLURS = os.environ.get("SLURS", "1").strip() != "0"  # 0: nobody says one (every NPC treated like a scientist)
 
 
@@ -450,9 +451,16 @@ def slur_note(npc):
                 + " «чмо» is a fallback, not your go-to word: at most one line in four. "
                 "Never preach hate about whole groups.")
     if level == "rare":
-        return (" Street slurs like «підар», «негр» or «жид» are not your usual talk: only very rarely, when you are "
-                "really angry or mocking someone, and then not always the same word. Never preach hate about whole "
-                "groups." + SLUR_ANSWER)
+        # about one line in ten (SLUR_RARE_CHANCE) gets one, from the whole list; the rest none at all
+        key = (npc or {}).get("id", (npc or {}).get("name"))
+        SLUR_TURN[key] = random.random() < SLUR_RARE_CHANCE
+        if SLUR_TURN[key]:
+            return (" This line, work one street slur in naturally, the way stalkers do: at the man you talk to or "
+                    "someone you talk about, as an insult or rough banter. Take it from these: "
+                    + ", ".join(f"«{w}»" for w in slur_pick()) + " (all you may use: " + SLUR_VARIANTS + "). "
+                    "One word, not a speech. Never preach hate about whole groups." + SLUR_ANSWER)
+        return (" No street slurs («підар», «негр», «жид» and the like) in this line; ordinary мат is fine."
+                + SLUR_ANSWER)
     if not is_monolith(npc or {}):
         return SLUR_ANSWER
     return ""
@@ -656,17 +664,17 @@ SLUR_STEMS = re.compile(r"(?<![^\W\d_])(жид|негр|негер(?!мет)|н�
 
 
 def has_slur(text, npc=None):
-    """True if the line has a slur this man shouldn't say now: bandits may always, ordinary stalkers in about
-    one line of seven, the Monolith and scientists never."""
+    """True if the line has a slur this man shouldn't say now: bandits may always, ordinary stalkers only in a line
+    rolled for one (about one in ten, see slur_note), the Monolith and scientists never."""
     level = slur_level(npc)
-    if level == "common":
-        note_slurs(text)  # what he just said, so his next lines (and the next bandit's) pick other words
+    if level in ("common", "rare"):
+        note_slurs(text)  # what he just said, so the next lines (anyone's) pick other words
     if not SLUR_STEMS.search(text or ""):
         return False
     if level == "common":
         return False
     if level == "rare":
-        return random.random() >= SLUR_RARE_CHANCE
+        return not SLUR_TURN.get((npc or {}).get("id", (npc or {}).get("name")), False)
     return True
 
 

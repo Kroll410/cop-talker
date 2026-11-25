@@ -41,7 +41,21 @@ note = talker.slur_note(bandit)
 ok &= check(all(w in note for w in ("підорлик", "негрило", "Негростан", "підріла")) and "Vary" in note,
             "a bandit gets the whole list and is told to vary it")
 ok &= check("негр" in talker.slur_note(stalker) and "Vary" not in talker.slur_note(stalker),
-            "a stalker: rare, no list")
+            "a stalker: rare, not told to vary like a bandit")
+# a stalker: about one line in ten is rolled to have a slur (from the whole list); the filter follows that roll
+rolled, agree = 0, True
+for _ in range(4000):
+    n = talker.slur_note(stalker)
+    yes = "work one street slur in" in n
+    rolled += yes
+    if yes and not all(w in n for w in ("підорлик", "негрило", "Негростан", "жид")):
+        agree = False
+    if talker.has_slur("Слухай, підарас, вали звідси", stalker) == yes:  # allowed exactly when rolled
+        agree = False
+ok &= check(0.08 < rolled / 4000 < 0.12, f"a stalker: a slur line about 10% of the time ({rolled / 40:.1f}%)")
+ok &= check(agree, "a stalker: a rolled line gets the whole list, and only a rolled line may keep its slur")
+talker.SLUR_TURN.clear()
+ok &= check(talker.has_slur("Слухай, підарас, вали звідси", stalker), "no roll yet for him: no slur")
 
 # SLURS=0: nobody may say one, nobody is given slur words, everybody still answers one
 talker.SLURS = False
