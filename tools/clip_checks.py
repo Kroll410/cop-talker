@@ -1,6 +1,6 @@
 """Shared checks for a clip reward («62», «Чики-брики»): a reward the streamer makes on Twitch (the app never creates
 it) and picks on the Redeems tab. A redemption goes to the game at once, no Zone queue and no autosave; the game
-shouts the clip 10 times from all round the player, each copy at its own spot, volume, pitch and delay (one code path,
+shouts the clip 7-17 times from all round the player, each copy at its own spot, volume, pitch and delay (one code path,
 play_clip, checked in tools/zone_lua.py), and the men around are confused and freaked out. Used by test_sixty_two.py
 and test_chiki.py; import it after talker (it needs companion/ on sys.path)."""
 import io

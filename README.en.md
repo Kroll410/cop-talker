@@ -124,9 +124,9 @@ Every reward except Speech and the Zone event goes off at once, with no queue. A
 | «Вова Віст» | `TWITCH_VOVA_REWARD` | A soldier with «Свистілка Вови Віста», a PKM that fires 100× as fast for 10× less damage |
 | «Анекдот» | `TWITCH_ANEKDOT_REWARD` | A «Хліб», a «Ковбаса» and 12 bolts land in front of you; nobody can keep them |
 | «Гоша» | `TWITCH_GOSHA_REWARD` | A hostile Mercenary named «Гоша» with a plain SPAS-12, 15–30 m away |
-| «62» | `TWITCH_62_REWARD` | «шиісят два» shouted 10 times from all round you |
-| «Чики-брики» | `TWITCH_CHIKI_REWARD` | «а ну чики-брики» shouted 10 times from all round you |
-| «Мочии» | `TWITCH_MOCHI_REWARD` | A zombified stalker's «Мочи...» groaned 10 times from all round you |
+| «62» | `TWITCH_62_REWARD` | «шиісят два» shouted 7–17 times from all round you |
+| «Чики-брики» | `TWITCH_CHIKI_REWARD` | «а ну чики-брики» shouted 7–17 times from all round you |
+| «Мочии» | `TWITCH_MOCHI_REWARD` | A zombified stalker's «Мочи...» groaned 7–17 times from all round you |
 
 Details:
 - **«Шари Суслова»**: the items are props. They don't roll, can't be picked up (they go back to their spot), and the fireballs stay visible even without a detector.

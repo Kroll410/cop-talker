@@ -3914,7 +3914,7 @@ class Talker:
 
     def send_clip(self, user, kind, name, text):
         """A clip reward («62», «Чики-брики»): the game shouts the streamer's clip for this kind (CLIPS in
-        talker_bridge.script, gamedata\\sounds\\talker\\*.ogg) 10 times at once from all round the player, each copy
+        talker_bridge.script, gamedata\\sounds\\talker\\*.ogg) 7-17 times at once from all round the player, each copy
         from its own spot, at its own volume, pitch, speed and delay, so they overlap and echo. At once, no queue, and
         no autosave (it's only a sound). Needs script version 15. text: the PDA line after the viewer's nickname."""
         nick = zone.clean_nick(user)

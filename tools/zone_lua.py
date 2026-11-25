@@ -618,7 +618,7 @@ check(ev and ev[0]["ok"] and [x["sec"] for x in c][:1] == ["talker_vova_soldier"
 L.execute("HAVE.talker_vova_soldier = false")
 take("news")
 
-# Clip rewards («62», «Чики-брики»; CLIPS): the streamer's clip CLIP_COUNT times at once, no autosave, each copy 3D at
+# Clip rewards («62», «Чики-брики»; CLIPS): the streamer's clip CLIP_COUNT[1]-[2] times at once, no autosave, each copy 3D at
 # its own spot around the player (one per slice of the circle, NEAR-FAR m), its own volume, pitch and delay; kept
 # referenced until done, then let go. One code path (play_clip), the clip picked by the Zone event's what.
 L.execute("""played, SOUNDS = {}, {}
@@ -635,7 +635,8 @@ sound_object = setmetatable({ s3d = 0, looped = 1, s2d = 2 }, { __call = functio
 TUTORIAL = false""")
 step(11000)
 take("saves"); take("created"); take("news"); events()
-count, near, far = L.eval("CLIP_COUNT"), L.eval("CLIP_NEAR"), L.eval("CLIP_FAR")
+(clo, chi), near, far = list(L.eval("CLIP_COUNT").values()), L.eval("CLIP_NEAR"), L.eval("CLIP_FAR")
+check((clo, chi) == (7, 17), f"copies: 7 to 17 a time {(clo, chi)}")
 (vlo, vhi), (plo, phi), (dlo, dhi) = (list(L.eval(k).values()) for k in ("CLIP_VOLUME", "CLIP_PITCH", "CLIP_DELAY"))
 check(sorted(L.eval("CLIPS").keys()) == ["62", "chiki", "mochi"],
       f"clips: «62», «Чики-брики» and «Мочии» {list(L.eval('CLIPS').keys())}")
@@ -649,7 +650,8 @@ for what, name, base in (("62", "62", "sixty_two"), ("chiki", "Чики-брик
     for x in p:
         s = x.pop("s")
         x.update(name=s.name, volume=s.volume, pitch=s.frequency, lo=s.min_distance, hi=s.max_distance)
-    check(count == 10 and len(p) == 10, f"{what}: 10 copies played at once ({len(p)})")
+    k = len(p)
+    check(clo <= k <= chi, f"{what}: {k} copies played at once (7-17)")
     check(all(x["flags"] == 0 and x["obj"] == 0 for x in p), f"{what}: 3D (s3d), from the player's side")
     kinds = Counter(x["name"] for x in p)
     check(set(kinds) == {f"talker\\{base}", f"talker\\{base}_slow", f"talker\\{base}_fast"}
@@ -657,26 +659,36 @@ for what, name, base in (("62", "62", "sixty_two"), ("chiki", "Чики-брик
           f"{what}: its own clip as recorded, slowed down and sped up, shared out evenly {dict(kinds)}")
     check(not saves and ev and ev[0].get("autosave") == "not needed", f"{what}: no autosave first, played straight away {saves} {ev}")
     vols, pitches, delays = [x["volume"] for x in p], [x["pitch"] for x in p], [x["delay"] for x in p]
-    check(len(set(vols)) == 10 and all(vlo <= v <= vhi for v in vols), f"{what}: each its own volume {[round(v, 2) for v in vols]}")
-    check(len(set(pitches)) == 10 and all(plo <= v <= phi for v in pitches) and min(pitches) < 1 < max(pitches),
+    check(len(set(vols)) == k and all(vlo <= v <= vhi for v in vols), f"{what}: each its own volume {[round(v, 2) for v in vols]}")
+    check(len(set(pitches)) == k and all(plo <= v <= phi for v in pitches) and min(pitches) < 1 < max(pitches),
           f"{what}: each its own pitch, low to high {[round(v, 2) for v in pitches]}")
-    check(len(set(delays)) == 10 and all(dlo <= v <= dhi for v in delays) and max(delays) - min(delays) > 1,
+    check(len(set(delays)) == k and all(dlo <= v <= dhi for v in delays) and max(delays) - min(delays) > 1,
           f"{what}: each its own start delay (seconds) {[round(v, 2) for v in delays]}")
     check(all(x["lo"] == 5 and x["hi"] == 60 for x in p), f"{what}: hearing range set after play (play resets it)")
     dist = [math.hypot(x["x"], x["z"]) for x in p]
     check(all(near - 1e-6 <= d <= far + 1e-6 for d in dist), f"{what}: {near}-{far} m from the player {[round(d, 1) for d in dist]}")
-    slices = {int((math.atan2(x["z"], x["x"]) % (2 * math.pi)) / (2 * math.pi) * 10) for x in p}
-    check(len(slices) == 10 and len({(round(x["x"], 3), round(x["z"], 3)) for x in p}) == 10,
+    slices = {int((math.atan2(x["z"], x["x"]) % (2 * math.pi)) / (2 * math.pi) * k) for x in p}
+    check(len(slices) == k and len({(round(x["x"], 3), round(x["z"], 3)) for x in p}) == k,
           f"{what}: all round the player, one per slice of the circle {sorted(slices)}")
     check(all(x["y"] > 0 for x in p), f"{what}: above the ground")
-    check(ev and ev[0]["ok"] and ev[0]["what"] == what and ev[0]["count"] == 10 and ev[0].get("section") == base,
+    check(ev and ev[0]["ok"] and ev[0]["what"] == what and ev[0]["count"] == k and ev[0].get("section") == base,
           f"{what}: zone_done {ev}")
     check(n and n[0].startswith(f"{name}|viewer передає"), f"{what}: PDA line {n}")
     check(not take("created"), f"{what}: nothing spawned")
-    check(L.eval("#clip_sounds") == 10, f"{what}: all 10 kept referenced while they play (no GC cut-off)")
+    check(L.eval("#clip_sounds") == k, f"{what}: all {k} kept referenced while they play (no GC cut-off)")
     longest = max(v[2] for v in L.eval(f'CLIPS["{what}"]').values())
     step(int((dhi + longest / plo) * 1000) + 2500)
     check(L.eval("#clip_sounds") == 0, f"{what}: let go once they've all finished")
+counts = Counter()
+for _ in range(60):  # a new number each redemption, anywhere from 7 to 17
+    L.execute("played = {}")
+    inbox("zone||62|62|t")
+    step(300)
+    counts[len(L.eval("played"))] += 1
+    events(); take("news")
+    step(12000)
+check(min(counts) >= 7 and max(counts) <= 17 and len(counts) >= 6,
+      f"the count varies from redemption to redemption, always 7-17 {dict(sorted(counts.items()))}")
 L.execute('SOUNDS["talker\\\\chiki_briki_fast.ogg"] = nil; played = {}')
 inbox("zone||chiki|Чики-брики|t")
 step(300)
@@ -688,7 +700,7 @@ L.execute("played = {}")
 inbox("zone||62|62|t")
 step(300)
 ev = events()
-check(len(list(L.eval("played").values())) == 10 and ev and ev[0]["ok"], f"62 still plays without the other clip {ev}")
+check(7 <= len(list(L.eval("played").values())) <= 17 and ev and ev[0]["ok"], f"62 still plays without the other clip {ev}")
 take("news")
 
 # «Мочии»: the same path with the game's own zombie voice (base_sounds.db, no file of ours) in one version; the copies
@@ -701,8 +713,8 @@ n, ev, saves = take("news"), events(), take("saves")
 p = [dict(x) for x in L.eval("played").values()]
 names = {x["s"].name for x in p}
 pitches = [x["s"].frequency for x in p]
-check(len(p) == 10 and names == {MOCHI}, f"mochi: 10 copies of the game's own sound {names}")
-check(all(x["flags"] == 0 for x in p) and len(set(pitches)) == 10 and min(pitches) < 1 < max(pitches),
+check(7 <= len(p) <= 17 and names == {MOCHI}, f"mochi: {len(p)} copies of the game's own sound {names}")
+check(all(x["flags"] == 0 for x in p) and len(set(pitches)) == len(p) and min(pitches) < 1 < max(pitches),
       f"mochi: 3D, each its own pitch {[round(v, 2) for v in pitches]}")
 check(not saves and ev and ev[0]["ok"] and ev[0]["what"] == "mochi" and ev[0].get("section") == "script_attack_5"
       and ev[0].get("autosave") == "not needed", f"mochi: zone_done, no autosave {ev}")

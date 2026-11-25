@@ -1,4 +1,4 @@
-"""«Чики-брики»: works like «62» (tools/clip_checks.py), with another clip: «а ну чики-брики» shouted 10 times from
+"""«Чики-брики»: works like «62» (tools/clip_checks.py), with another clip: «а ну чики-брики» shouted 7-17 times from
 all round the player (sounds\\talker\\chiki_briki*.ogg)."""
 import sys
 from pathlib import Path

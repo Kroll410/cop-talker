@@ -1,5 +1,5 @@
 """«62»: a reward the streamer makes on Twitch (the app never creates it) and picks on the Redeems tab. A redemption
-goes to the game at once, no Zone queue and no autosave; the game shouts the streamer's clip «шиісят два» 10 times
+goes to the game at once, no Zone queue and no autosave; the game shouts the streamer's clip «шиісят два» 7-17 times
 from all round the player, each copy at its own spot, volume, pitch and delay (checked in tools/zone_lua.py), and the
 men around are confused and freaked out. The checks are shared with «Чики-брики» (tools/clip_checks.py)."""
 import sys

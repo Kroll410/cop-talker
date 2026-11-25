@@ -1060,7 +1060,7 @@ GIANT_SECTIONS, GIANT_NEAR, GIANT_FAR = { "gigant_normal", "gigant_strong", "gig
 ANEKDOT_AHEAD, ANEKDOT_SIDE, ANEKDOT_BOLTS, ANEKDOT_SPREAD = 1.8, 0.15, 12, { 0.4, 1.0 }
 
 -- Clip rewards («62», «Чики-брики», «Мочии»; Twitch): a clip (gamedata\sounds\..., mono for 3D) played
--- CLIP_COUNT times at once, every copy from its own spot around the player (in its own slice of the circle, CLIP_NEAR
+-- CLIP_COUNT[1] to [2] times at once (rolled anew each time), every copy from its own spot around the player (in its own slice of the circle, CLIP_NEAR
 -- to _FAR metres away, CLIP_HEIGHT[1] to [2] metres up), at its own volume (CLIP_VOLUME, 1 = full), pitch (CLIP_PITCH:
 -- 1 = as recorded; the engine plays a lower one deeper and slower too) and start delay (CLIP_DELAY, seconds), so they
 -- overlap and echo all round. Each copy is heard at full volume within CLIP_RANGE[1] metres, fading out by [2].
@@ -1073,7 +1073,7 @@ CLIPS = {
 	-- version only; CLIP_PITCH alone makes the copies deeper and slower or higher and faster.
 	mochi = { { "characters_voice\\human_01\\zombied\\fight\\attack\\script_attack_5", 2.11 } },
 }
-CLIP_COUNT = 10
+CLIP_COUNT = { 7, 17 }  -- how many copies: a new number each redemption, from 7 to 17
 CLIP_NEAR, CLIP_FAR, CLIP_HEIGHT = 3, 15, { 0.5, 3 }
 CLIP_VOLUME, CLIP_PITCH, CLIP_DELAY = { 0.35, 1.0 }, { 0.7, 1.5 }, { 0, 2.5 }
 CLIP_RANGE = { 5, 60 }
@@ -1102,7 +1102,7 @@ local function play_clip(sounds)
 			return nil, "no sound " .. v[1] .. (string.find(v[1], "^talker\\") and " (run install_mod.ps1)" or " in the game")
 		end
 	end
-	local n = CLIP_COUNT
+	local n = math.random(CLIP_COUNT[1], CLIP_COUNT[2])
 	local kinds = {}  -- which version each copy plays: all of them about equally often, in random order
 	for i = 1, n do kinds[i] = sounds[(i - 1) % #sounds + 1] end
 	shuffle(kinds)
@@ -1538,7 +1538,7 @@ local function zone_event(text, save)
 		done.ok, done.section, done.count = true, sec, 1
 		return append_event(done)
 	end
-	if CLIPS[what] then  -- «62», «Чики-брики», «Мочии»: the clip shouted 10 times from all round, overlapping (play_clip)
+	if CLIPS[what] then  -- «62», «Чики-брики», «Мочии»: the clip shouted 7-17 times from all round, overlapping (play_clip)
 		local count, why = play_clip(CLIPS[what])
 		if not count then done.reason = why; return append_event(done) end
 		say()
