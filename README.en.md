@@ -112,6 +112,8 @@ A viewer gets linked to a free NPC within `TWITCH_DISTANCE`. If that NPC dies, t
 
 Messages wait in a queue until an NPC is near (at most `TWITCH_QUEUE_MAX`; the oldest are dropped). The Twitch tab shows how many are waiting; **Clear queue** next to it drops them all except the one being said.
 
+When chat is busy, several messages can play at once (`TWITCH_PARALLEL`, default 1 = one after another): each is said by a different NPC nearby, and each starts after a random pause from `TWITCH_PARALLEL_DELAY` (seconds, e.g. `0.5-3`), so the voices overlap naturally. Your own push-to-talk waits until that batch has finished.
+
 ### Rewards
 
 Channel-point rewards need Affiliate or Partner. The app never adds rewards to your channel: you make each one on Twitch yourself, with no message unless noted, and pick it in its row on the **Redeems** tab (**Refresh rewards** lists the channel's rewards; you can also type the title). Each row shows what the reward does, whether it's on, and a **Test** button that runs it without points. If a reward you picked isn't on the channel, the Twitch tab's status says so, and the app waits until you make it.
