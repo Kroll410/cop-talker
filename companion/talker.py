@@ -389,11 +389,12 @@ def is_cyrillic(text):
 SLUR_COMMON = {"bandit"}
 SLUR_NEVER = {"monolith", "ecolog", "zombied"}
 SLUR_RARE_CHANCE = 0.15  # share of an ordinary stalker's lines where a slur may stay in
+SLURS = os.environ.get("SLURS", "1").strip() != "0"  # 0: nobody says one (every NPC treated like a scientist)
 
 
 def slur_level(npc):
     community = (npc or {}).get("community")
-    if is_monolith(npc or {}) or community in SLUR_NEVER:
+    if not SLURS or is_monolith(npc or {}) or community in SLUR_NEVER:
         return "never"
     return "common" if community in SLUR_COMMON else "rare"
 
@@ -409,8 +410,15 @@ SLUR_VARIANTS = ("«підар», «підор», «підарас», «підо
                  "country: «вали у свій Негростан»), «жид», «чмо»")
 
 
+# With SLURS=0 a man still answers an insult, but isn't handed slur words to copy
+SLUR_ANSWER_PLAIN = (" If someone throws an ethnic or homophobic slur at you or a friend, you react like a real man: "
+                     "take offence, snap back, threaten, or brush it off with contempt.")
+
+
 def slur_note(npc):
     level = slur_level(npc)
+    if not SLURS:
+        return "" if is_monolith(npc or {}) else SLUR_ANSWER_PLAIN
     if level == "common":
         return (" Street slurs like «підар», «негр», «жид», «чмо» are part of your everyday vocabulary: you throw them "
                 "at people as insults all the time, like the game's bandits («жид» at anyone stingy, greedy or "

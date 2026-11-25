@@ -43,6 +43,18 @@ ok &= check(all(w in note for w in ("підорлик", "негрило", "Не�
 ok &= check("негр" in talker.slur_note(stalker) and "Vary" not in talker.slur_note(stalker),
             "a stalker: rare, no list")
 
+# SLURS=0: nobody may say one, nobody is given slur words, everybody still answers one
+talker.SLURS = False
+ok &= check(all(talker.has_slur(f"Слухай, {w}, вали звідси", n) for w in VARIANTS + ["жид"] for n in (bandit, stalker)),
+            "SLURS=0: a bandit's or a stalker's line with any slur is written again")
+notes = [talker.slur_note(n) for n in (bandit, stalker, scientist)]
+ok &= check(all("react" in x and not talker.SLUR_STEMS.search(x) for x in notes),
+            "SLURS=0: no slur words in anyone's prompt, but they still react to one")
+ok &= check("surzhyk" in talker.npc_brief(bandit) and not talker.SLUR_STEMS.search(talker.npc_brief(bandit)),
+            "SLURS=0: a bandit still talks surzhyk, without slurs")
+talker.SLURS = True
+ok &= check(not talker.has_slur("Ти жид, братан", bandit), "SLURS=1 again: a bandit may")
+
 # the voice: a bandit's Russian stays, a stalker's stray Russian letters are fixed
 sent, voiced = [], []
 t = talker.Talker.__new__(talker.Talker)

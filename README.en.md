@@ -17,7 +17,7 @@ How NPCs talk:
 - they recognise characters from the series (Strelok, the Marked One, Sidorovich…) and talk about them true to the lore;
 - they talk about anything: the Zone, home, real news (Suspilne, BBC Ukrainian and TSN RSS; a story isn't repeated unless it's big), jokes, dirty stuff, nonsense;
 - they react to accusations in different ways: own up, brag, wriggle out;
-- they swear; bandits also use slurs, Monolith and scientists never do.
+- they swear; bandits also use slurs, Monolith and scientists never do (`SLURS=0` turns slurs off for everyone).
 
 They also speak up on their own: greetings, reactions when you pick up an artifact or walk into an anomaly, combat remarks (only when they're actually fighting), chats with each other. Tell a joke and the people around laugh or say it was lame. If you get killed, the killer mocks you.
 
@@ -81,6 +81,7 @@ Settings are on the Settings tab (which is just `settings.ini`). The main ones:
 - `PLAYER_NAME`: what stalkers call you; `PLAYER_BIO`: your backstory;
 - `LLM_PROVIDER`: `gemini` or `claude`;
 - `FUN_LEVEL`: how many jokes and how much swearing;
+- `SLURS`: `1` as above, `0` no NPC ever says a slur;
 - `GROUP_STYLE`: `lead` (one answers, the others mutter) or `all` (in turn);
 - `OUTSIDE_TALK`, `NEWS_FEEDS`: talk about life outside the Zone and the news.
 

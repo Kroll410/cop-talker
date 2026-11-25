@@ -123,7 +123,7 @@ NICE = {"STALKER_DIR": "Game folder", "SPEAK_MODE": "Speaking", "PTT_KEY": "Push
         "GROUP_ASIDE_VOLUME": "Mutter volume", "COMPANION_CHANCE": "Companion talk chance",
         "COMPANION_COOLDOWN": "Companion cooldown", "CHAT_CHANCE": "NPC chat chance", "CHAT_COOLDOWN": "NPC chat cooldown",
         "CHAT_DISTANCE": "NPC chat distance", "PLAYER_NAME": "Your nickname", "PLAYER_BIO": "Your backstory",
-        "FUN_LEVEL": "Humour", "QUIRK_CHANCE": "Quirks", "MEMORY_KEEP": "Talks kept word for word",
+        "FUN_LEVEL": "Humour", "SLURS": "Slurs", "QUIRK_CHANCE": "Quirks", "MEMORY_KEEP": "Talks kept word for word",
         "CLEAR_MEMORY": "Clear memory on start", "OUTSIDE_TALK": "Talk about life outside", "NEWS_FEEDS": "News feeds",
         "TWITCH_ENABLED": "Twitch", "TWITCH_SOURCE": "Source", "TWITCH_CHANNEL": "Channel",
         "TWITCH_QUEUE_MAX": "Messages waiting, at most", "TWITCH_REWARD": "Speech reward title",
