@@ -362,14 +362,14 @@ FUN_RULE += ("\n- The Duty faction is called only Долг (Долгу, Долг
              "\n- Fillers and swear words go anywhere in a sentence, the way people really talk: at the start, in the "
              "middle between words, as a pause before the point; not always tacked on at the end. Rotate them, "
              "don't lean on one: блін, бляха, бляха-муха, бля, блять, йопта, йо-майо, єбать, їбать-копать, хулі, "
-             "нахуй, нахера, сука, курва, пиздець, хуй його знає, шо за хуйня, ну нахєр, трясця."
+             "нахуй, нахера, сука, пиздець, хуй його знає, шо за хуйня, ну нахєр, трясця (not «курва»: it's worn out)."
              "\n- Say something real: answer what you're asked. Don't trail off with '...' at the end of a line "
              "(only a badly wounded man does).")
 SYSTEM_PROMPT = SYSTEM_PROMPT.format(tags=AUDIO_TAGS_RULE if EXPRESSIVE else "", fun=FUN_RULE)
 # The model grabs the same bright filler from the list over and over ("йопта" in 4 of 11): each request
 # gets its own few to lean on, so different lines sound different.
 FILLERS = ["блін", "бляха", "бляха-муха", "бля", "блять", "йопта", "йо-майо", "єбать", "їбать-копать", "хулі", "нахуй",
-           "нахера", "сука", "курва", "пиздець", "хуй його знає", "шо за хуйня", "ну нахєр", "трясця", "ядрить"]
+           "нахера", "сука", "пиздець", "хуй його знає", "шо за хуйня", "ну нахєр", "трясця", "ядрить"]
 
 
 def filler_hint():
@@ -389,7 +389,19 @@ def is_cyrillic(text):
 SLUR_COMMON = {"bandit"}
 SLUR_NEVER = {"monolith", "ecolog", "zombied"}
 SLUR_RARE_CHANCE = 0.10  # share of an ordinary stalker's lines that get a slur (rolled per line, before he speaks)
-SLUR_TURN = {}  # NPC id -> this line of his was rolled to have a slur (set with his prompt, read by has_slur)
+SLUR_TURN = {}  # NPC id -> (when rolled, this line of his gets a slur): set with his prompt, read by has_slur
+SLUR_TURN_HOLD = 5.0  # seconds one roll stands: a prompt that describes him twice (and its filter) shares it
+
+
+def slur_turn(npc, roll=False):
+    """Does this ordinary stalker's current line get a slur? roll=True (building his prompt): roll anew, unless he
+    was rolled just now for the same prompt. False when never rolled."""
+    key = (npc or {}).get("id", (npc or {}).get("name"))
+    when, yes = SLUR_TURN.get(key, (0.0, False))
+    if roll and time.time() - when > SLUR_TURN_HOLD:
+        yes = random.random() < SLUR_RARE_CHANCE
+        SLUR_TURN[key] = (time.time(), yes)
+    return yes
 SLURS = os.environ.get("SLURS", "1").strip() != "0"  # 0: nobody says one (every NPC treated like a scientist)
 
 
@@ -408,9 +420,12 @@ SLUR_ANSWER = (" If someone throws a slur at you or a friend (\"жид\", \"пі
 # («вали у свій Негростан»). All of them are caught by SLUR_STEMS below, so nobody else says them often.
 SLUR_VARIANTS = ("«підар», «підор», «підарас», «підорас», «підарасік», «підорлик», «підарок», «підріла», «негр», "
                  "«негрик», «негрятко», «негрило», «негер», «нігер», «ніга», «негроїд», «Негростан» (a made-up "
-                 "country: «вали у свій Негростан»), «жид», «чмо»")
+                 "country: «вали у свій Негростан»), «жид»")
 # The same, one word each, for the per-line pick (bandits otherwise fall back on «чмо» and «жид» every time).
-SLUR_WORDS = re.findall(r"«([^»]+)»", SLUR_VARIANTS.split("(a made-up")[0]) + ["жид", "чмо"]
+SLUR_WORDS = re.findall(r"«([^»]+)»", SLUR_VARIANTS.split("(a made-up")[0]) + ["жид"]
+# the two families each line's pick always draws from (the streamer wants these most): «підор»..., «негр»...
+SLUR_FAMILIES = ([w for w in SLUR_WORDS if w.lower().startswith(("підар", "підор", "підріл"))],
+                 [w for w in SLUR_WORDS if w.lower().startswith(("негр", "негер", "нігер", "ніга"))])
 SLUR_WORD_RE = re.compile(r"(?<![^\W\d_])(" + "|".join(sorted((re.escape(w) for w in SLUR_WORDS), key=len, reverse=True))
                           + r")(?![^\W\d_])", re.I)
 RECENT_SLURS = []  # the last words bandits used around here, oldest first (kept short)
@@ -426,10 +441,17 @@ def note_slurs(text):
     del RECENT_SLURS[:-6]
 
 
-def slur_pick():
-    """Three words for this line, none of the ones just used."""
-    fresh = [w for w in SLUR_WORDS if w not in RECENT_SLURS] or SLUR_WORDS
-    return random.sample(fresh, min(3, len(fresh)))
+def slur_pick(exclude=()):
+    """Three words for this line, none of the ones just used: one of the «підор» kind, one of the «негр» kind,
+    and one more from the whole list."""
+    def fresh(words):
+        words = [w for w in words if w not in exclude]
+        return [w for w in words if w not in RECENT_SLURS] or words
+    pick = [random.choice(fresh(family)) for family in SLUR_FAMILIES]
+    rest = [w for w in fresh(SLUR_WORDS) if w not in pick]
+    pick += random.sample(rest, min(1, len(rest)))
+    random.shuffle(pick)
+    return pick
 
 
 # With SLURS=0 a man still answers an insult, but isn't handed slur words to copy
@@ -442,22 +464,21 @@ def slur_note(npc):
     if not SLURS:
         return "" if is_monolith(npc or {}) else SLUR_ANSWER_PLAIN
     if level == "common":
-        return (" Street slurs like «підар», «негр», «жид», «чмо» are part of your everyday vocabulary: you throw them "
+        return (" Street slurs like «підор», «підар», «негр», «жид» are part of your everyday vocabulary: you throw them "
                 "at people as insults all the time, like the game's bandits («жид» at anyone stingy, greedy or "
                 "haggling over money). Vary them, never the same word twice in a row: " + SLUR_VARIANTS + ". "
                 "This time, if you throw one, take it from these: " + ", ".join(f"«{w}»" for w in slur_pick()) + "."
                 + (" Just used around here, so not these: " + ", ".join(f"«{w}»" for w in RECENT_SLURS) + "."
                    if RECENT_SLURS else "")
-                + " «чмо» is a fallback, not your go-to word: at most one line in four. "
+                + " Mostly the «підор» and «негр» kinds; «чмо» and «курва» are worn out, leave them. "
                 "Never preach hate about whole groups.")
     if level == "rare":
         # about one line in ten (SLUR_RARE_CHANCE) gets one, from the whole list; the rest none at all
-        key = (npc or {}).get("id", (npc or {}).get("name"))
-        SLUR_TURN[key] = random.random() < SLUR_RARE_CHANCE
-        if SLUR_TURN[key]:
+        if slur_turn(npc, roll=True):
             return (" This line, work one street slur in naturally, the way stalkers do: at the man you talk to or "
                     "someone you talk about, as an insult or rough banter. Take it from these: "
-                    + ", ".join(f"«{w}»" for w in slur_pick()) + " (all you may use: " + SLUR_VARIANTS + "). "
+                    + ", ".join(f"«{w}»" for w in slur_pick(exclude=("чмо",))) + " (all you may use: "
+                    + SLUR_VARIANTS + "; «чмо» doesn't count). "
                     "One word, not a speech. Never preach hate about whole groups." + SLUR_ANSWER)
         return (" No street slurs («підар», «негр», «жид» and the like) in this line; ordinary мат is fine."
                 + SLUR_ANSWER)
@@ -674,7 +695,7 @@ def has_slur(text, npc=None):
     if level == "common":
         return False
     if level == "rare":
-        return not SLUR_TURN.get((npc or {}).get("id", (npc or {}).get("name")), False)
+        return not slur_turn(npc)
     return True
 
 
@@ -1745,11 +1766,14 @@ class Brain:
         if recent:
             situation += ("\nAlready said around here; don't repeat their words, jokes, topic or opening:\n"
                           + "\n".join(f"- {line}" for line in recent))
-        text, rejected, slurred = "", [], False
+        text, rejected, slurred, missed = "", [], False, False
         for attempt in range(3):
             if slurred:
                 ask = situation + ("\n\nYour last try used a slur against a real group of people. Say it again "
                                    "without any such word; plain insults and мат are fine.")
+            elif missed:  # an ordinary stalker's line rolled for a slur (about 1 in 10) came back without one
+                ask = situation + ("\n\nYour last try left out the street slur this line needs. Say it again with one "
+                                   "of the slurs named above worked in naturally (not «чмо»).")
             else:
                 ask = situation if not rejected else situation + (
                     "\n\nThese tries were too close to what was already said, do not use them either:\n"
@@ -1793,6 +1817,10 @@ class Brain:
             text = self.vary_tags(text)
             slurred = has_slur(text, npc)  # a slur he should not say now: ask again rather than say it
             if slurred:
+                continue
+            missed = (attempt == 0 and slur_level(npc) == "rare" and not SLUR_STEMS.search(text)
+                      and slur_turn(npc))
+            if missed:  # one more try only; a second miss is said as it is
                 continue
             # Never offer or boast about goods he doesn't carry (and an item tag for one is the same lie).
             stock = npc.get("stock") or []

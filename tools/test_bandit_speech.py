@@ -45,10 +45,13 @@ ok &= check("негр" in talker.slur_note(stalker) and "Vary" not in talker.slu
 # a stalker: about one line in ten is rolled to have a slur (from the whole list); the filter follows that roll
 rolled, agree = 0, True
 for _ in range(4000):
+    talker.SLUR_TURN.clear()  # a new line of his (one roll stands a few seconds, for one prompt)
     n = talker.slur_note(stalker)
     yes = "work one street slur in" in n
     rolled += yes
     if yes and not all(w in n for w in ("підорлик", "негрило", "Негростан", "жид")):
+        agree = False
+    if ("work one street slur in" in talker.slur_note(stalker)) != yes:  # described twice in a prompt: same roll
         agree = False
     if talker.has_slur("Слухай, підарас, вали звідси", stalker) == yes:  # allowed exactly when rolled
         agree = False
