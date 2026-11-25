@@ -423,6 +423,27 @@ SLUR_ANSWER = (" If someone throws a slur at you or a friend (\"жид\", \"пі
 SLUR_VARIANTS = ("«підар», «підор», «підарас», «підорас», «підарасік», «підорлик», «підарок», «підріла», «негр», "
                  "«негрик», «негрятко», «негрило», «негер», «нігер», «ніга», «негроїд», «Негростан» (a made-up "
                  "country: «вали у свій Негростан»), «жид», «чмо»")
+# The same, one word each, for the per-line pick (bandits otherwise fall back on «чмо» and «жид» every time).
+SLUR_WORDS = re.findall(r"«([^»]+)»", SLUR_VARIANTS.split("(a made-up")[0]) + ["жид", "чмо"]
+SLUR_WORD_RE = re.compile(r"(?<![^\W\d_])(" + "|".join(sorted((re.escape(w) for w in SLUR_WORDS), key=len, reverse=True))
+                          + r")(?![^\W\d_])", re.I)
+RECENT_SLURS = []  # the last words bandits used around here, oldest first (kept short)
+
+
+def note_slurs(text):
+    """Remember which slur words a line used, so the next lines pick others."""
+    for m in SLUR_WORD_RE.finditer(text or ""):
+        word = next((w for w in SLUR_WORDS if w.lower() == m.group(1).lower()), m.group(1))
+        if word in RECENT_SLURS:
+            RECENT_SLURS.remove(word)
+        RECENT_SLURS.append(word)
+    del RECENT_SLURS[:-6]
+
+
+def slur_pick():
+    """Three words for this line, none of the ones just used."""
+    fresh = [w for w in SLUR_WORDS if w not in RECENT_SLURS] or SLUR_WORDS
+    return random.sample(fresh, min(3, len(fresh)))
 
 
 # With SLURS=0 a man still answers an insult, but isn't handed slur words to copy
@@ -438,6 +459,10 @@ def slur_note(npc):
         return (" Street slurs like «підар», «негр», «жид», «чмо» are part of your everyday vocabulary: you throw them "
                 "at people as insults all the time, like the game's bandits («жид» at anyone stingy, greedy or "
                 "haggling over money). Vary them, never the same word twice in a row: " + SLUR_VARIANTS + ". "
+                "This time, if you throw one, take it from these: " + ", ".join(f"«{w}»" for w in slur_pick()) + "."
+                + (" Just used around here, so not these: " + ", ".join(f"«{w}»" for w in RECENT_SLURS) + "."
+                   if RECENT_SLURS else "")
+                + " «чмо» is a fallback, not your go-to word: at most one line in four. "
                 "Never preach hate about whole groups.")
     if level == "rare":
         return (" Street slurs like «підар», «негр» or «жид» are not your usual talk: only very rarely, when you are "
@@ -648,9 +673,11 @@ SLUR_STEMS = re.compile(r"(?<![^\W\d_])(жид|негр|негер(?!мет)|н�
 def has_slur(text, npc=None):
     """True if the line has a slur this man shouldn't say now: bandits may always, ordinary stalkers in about
     one line of seven, the Monolith and scientists never."""
+    level = slur_level(npc)
+    if level == "common":
+        note_slurs(text)  # what he just said, so his next lines (and the next bandit's) pick other words
     if not SLUR_STEMS.search(text or ""):
         return False
-    level = slur_level(npc)
     if level == "common":
         return False
     if level == "rare":
