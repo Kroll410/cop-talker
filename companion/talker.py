@@ -3259,40 +3259,6 @@ class Talker:
                 self.memory.witness(self.npc_key(ev["npc"], state, level),
                                     "I went with him" if ev.get("order") == "follow" else "he told me to stay behind")
 
-    def on_player_death(self, ev):
-        """The player is dead: his killer gloats over the body, and maybe one more enemy joins in."""
-        killer = ev.get("killer") if isinstance(ev.get("killer"), dict) else None
-        others = [n for n in ev.get("enemies") or [] if isinstance(n, dict) and not is_monolith(n)]
-        speakers = ([killer] if killer and not is_monolith(killer) else []) + \
-            ([random.choice(others)] if others and (not killer or random.random() < 0.6) else [])
-        if not speakers:
-            log("You died (nobody around to gloat)")
-            return
-        log(f"You died: {', '.join(n.get('name', '?') for n in speakers)} gloat")
-        threading.Thread(target=self._gloat, args=(speakers, killer), daemon=True).start()
-
-    def _gloat(self, speakers, killer):
-        if not self.busy.acquire(timeout=15):
-            return
-        try:
-            state = self.game.state() or {}
-            for npc in speakers:
-                if npc is killer:
-                    what = ("You just killed the player: he lies dead at your feet. Gloat over his body, speaking to "
-                            "him: mock him, curse him, spit your hatred at him. Short and nasty, max 15 words.")
-                else:
-                    what = (f"{(killer or {}).get('name', 'Your side')} just killed the player, your enemy; he lies dead "
-                            "in front of you. Mock and curse the dead man, speaking to him. Short and nasty, max 12 words.")
-                line = self.brain.reply(dict(npc, relation="enemy"), state, "", [], "", "react", extra={"what": what})
-                if line:
-                    log(f"  {npc.get('name')} (over your body): {line}")
-                    self.speak(npc, line, state, note="(over the player's dead body)")
-                    time.sleep(0.3)
-        except Exception as exc:
-            log(f"gloat error: {exc!r}")
-        finally:
-            self.busy.release()
-
     def on_order(self, ev):
         """Follow/stay hotkeys: the game already did it; the NPC just answers in a few words."""
         npc = ev.get("npc") or {}
@@ -4705,8 +4671,6 @@ class Talker:
                     for ev in events:
                         if ev.get("type") == "order":
                             self.on_order(ev)
-                        elif ev.get("type") == "actor_death" and not CHAT_ONLY:
-                            self.on_player_death(ev)
                     if not CHAT_ONLY:
                         self.quick_react(events)
                         self.ambient([ev for ev in events if ev.get("type") not in ("order",) + tuple(self.REACTIONS)])

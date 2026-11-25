@@ -19,7 +19,7 @@ How NPCs talk:
 - they react to accusations in different ways: own up, brag, wriggle out;
 - they swear; bandits also use slurs, Monolith and scientists never do (`SLURS=0` turns slurs off for everyone).
 
-They also speak up on their own: greetings, reactions when you pick up an artifact or walk into an anomaly, combat remarks (only when they're actually fighting), chats with each other. Tell a joke and the people around laugh or say it was lame. If you get killed, the killer mocks you.
+They also speak up on their own: greetings, reactions when you pick up an artifact or walk into an anomaly, combat remarks (only when they're actually fighting), chats with each other. Tell a joke and the people around laugh or say it was lame.
 
 Conversations can change things in the game:
 - a gesture (wave, salute…), also on request;
