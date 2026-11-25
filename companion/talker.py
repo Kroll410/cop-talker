@@ -1364,7 +1364,9 @@ from lore import lore_for  # noqa: E402  (companion/lore.py)
 import prices  # noqa: E402  (companion/prices.py: the game's own trade prices)
 import zone  # noqa: E402  (companion/zone.py: the Twitch Zone reward's random events)
 import redeems  # noqa: E402  (companion/redeems.py: every channel-points redeem, one list)
-NO_RETRY = {r.id for r in redeems.TRIGGERS}  # fired at once: a failed one is given up, never queued again
+# fired at once: a failed one is given up, never queued again (Життя для Зони goes through the Zone queue as before:
+# no room for the man now, he's tried again in 30 s)
+NO_RETRY = {r.id for r in redeems.TRIGGERS} - {"life"}
 
 USAGE = Usage(ROOT / "usage.json")
 
@@ -3886,16 +3888,22 @@ class Talker:
         report("TWITCH_QUEUE", str(len(self.twitch_queue)))
 
     # ------------------------------------------------------------ Zone reward (companion/zone.py)
-    def on_zone(self, user, redemption=None):
+    def on_zone(self, user, redemption=None, kind=None):
         """A viewer redeemed the Zone reward: rolled now; first in the queue goes off at once, the others
-        each wait TWITCH_ZONE_GAP minutes after the one before."""
-        item = self.zone.add(user, time.time())
+        each wait TWITCH_ZONE_GAP minutes after the one before. kind "life": the Життя для Зони reward."""
+        item = self.zone.add(user, time.time(), kind)
         wait = item["due"] - time.time()
         when = "now" if wait < 30 else f"in ~{max(1, round(wait / 60))} min"
         log(f"Twitch: {user} redeemed the Zone reward -> {zone.label(item)} ({when}, waiting: {len(self.zone.items)})")
         soon = "Щось станеться просто зараз" if wait < 30 else f"Щось станеться за ~{max(1, round(wait / 60))} хв"
         self.game.send("twitch", None, f"{zone.clean_nick(user)}: Зона почула тебе. {soon}")
         self.report_zone(force=True)
+
+    def on_life(self, user, redemption=None):
+        """«Життя для Зони»: a stalker turns up 15-30 m away wearing the viewer's nick, a friend who follows the player
+        or an enemy, 50/50. Its own reward now, but the same as when the Zone event rolled it: the same queue and
+        gap, the same PDA notice, tried again if the game has no room for him."""
+        self.on_zone(user, redemption, kind="life")
 
     def redeem_blocked(self, user, name, need):
         """Why a redeem can't go to the game right now (logged, and shown on the window's Redeems tab), or None.
@@ -4532,9 +4540,11 @@ class Talker:
                             self.on_zone(who)
                         elif arg == "speech":  # the speech reward: a line said by an NPC near you
                             self.on_twitch(who, "$Перевірка зв'язку. Прийом.", None)
+                        elif arg == "life":  # Життя для Зони's Test: at once, skipping the queue (as it always did)
+                            self.zone_test(arg)
                         elif redeems.by_id(arg) and redeems.by_id(arg).kind == "trigger":  # as if redeemed, at once
                             getattr(self, redeems.by_id(arg).handler)(who)
-                        else:  # "zone gift|life|child|any": at once
+                        else:  # "zone gift|child|any": at once
                             self.zone_test(arg)
                 else:
                     return  # no window attached (console run): Ctrl+C as usual

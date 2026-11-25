@@ -116,12 +116,13 @@ Messages wait in a queue until an NPC is near (at most `TWITCH_QUEUE_MAX`; the o
 
 Channel-point rewards need Affiliate or Partner. The app never adds rewards to your channel: you make each one on Twitch yourself, with no message unless noted, and pick it in its row on the **Redeems** tab (**Refresh rewards** lists the channel's rewards; you can also type the title). Each row shows what the reward does, whether it's on, and a **Test** button that runs it without points. If a reward you picked isn't on the channel, the Twitch tab's status says so, and the app waits until you make it.
 
-Every reward except Speech and the Zone event goes off at once, with no queue. After each one, the NPCs nearby react out loud.
+Every reward except Speech, the Zone event and «Життя для Зони» goes off at once, with no queue. After each one, the NPCs nearby react out loud.
 
 | Reward | Setting | What happens |
 |---|---|---|
 | Speech | `TWITCH_REWARD` | With `TWITCH_SOURCE=reward`, an NPC says the text of the redemption. This one has a message |
-| Zone event | `TWITCH_ZONE_REWARD` | A random gift, stalker or mutant pack, queued (below) |
+| Zone event | `TWITCH_ZONE_REWARD` | A random gift or mutant pack, queued (below) |
+| «Життя для Зони» | `TWITCH_LIFE_REWARD` | A stalker with the viewer's nick, friend or enemy, in the same queue (below) |
 | «Шари Суслова» | `TWITCH_SUSLOV_REWARD` | Two «Вогняна куля» and a «Ковбаса» land in front of you, in a well-known shape |
 | «Хуй будеш?» | `TWITCH_GIANT_REWARD` | A hostile pseudogiant turns up 15–30 m away and comes for you |
 | «Вова Віст» | `TWITCH_VOVA_REWARD` | A soldier with «Свистілка Вови Віста», a PKM that fires 100× as fast for 10× less damage |
@@ -144,11 +145,12 @@ Before every reward except the sound ones, the game is saved as `talker_autosave
 
 Each redemption rolls an event right away, and the PDA shows that the Zone heard it. The first event in the queue happens at once; each one behind it waits 5–7 minutes after the one before (`TWITCH_ZONE_GAP`; with `0`, every event happens at once). The Zone event's row on the Redeems tab shows the queue, the gap, the biggest pack, and two test buttons: **Test** (queued like a real one) and **Fire now** (at once).
 
-- **Дар Зони** (gift, 25%): a random item of the game (no quest items) in your backpack. The cheaper an item, the more often it comes: bread about 40 times as often as an exoskeleton. Weapon add-ons (scopes, silencer, grenade launchers) are rarer still than their price says. `python tools/check_zone_sections.py --odds` lists each item's chance.
-- **Життя для Зони** (life, 50%): a stalker appears 15–30 m away, half the time a friend who follows you (always a Loner), half an enemy of any faction. He wears the viewer's nick until he dies, and a friend greets you first.
-- **Дитя Зони** (child, 25%): mutants of one kind appear 25–50 m away and come for you. Mostly one or two (89%), 3–4 in 9.5% of cases, 5 or more in 1.4%. Weak kinds (tushkans, blind dogs, flesh) come more often and sometimes in packs; dangerous ones (bloodsucker, chimera, pseudogiant) seldom and almost always alone. The biggest pack is `TWITCH_ZONE_PACK_MAX` (default 6); tushkans have their own, up to 10. All the odds are in one table in `companion/zone.py`: `python companion/zone.py 6` prints them, and `python tools/zone_sim.py` checks them by simulation.
+- **Дар Зони** (gift, 50%): a random item of the game (no quest items) in your backpack. The cheaper an item, the more often it comes: bread about 40 times as often as an exoskeleton. Weapon add-ons (scopes, silencer, grenade launchers) are rarer still than their price says. `python tools/check_zone_sections.py --odds` lists each item's chance.
+- **Дитя Зони** (child, 50%): mutants of one kind appear 25–50 m away and come for you. Mostly one or two (89%), 3–4 in 9.5% of cases, 5 or more in 1.4%. Weak kinds (tushkans, blind dogs, flesh) come more often and sometimes in packs; dangerous ones (bloodsucker, chimera, pseudogiant) seldom and almost always alone. The biggest pack is `TWITCH_ZONE_PACK_MAX` (default 6); tushkans have their own, up to 10. All the odds are in one table in `companion/zone.py`: `python companion/zone.py 6` prints them, and `python tools/zone_sim.py` checks them by simulation.
 
-The PDA line shows the chance of what happened, e.g. «шанс 25%». A mutant event shows two: the chance of the kind among all mutant kinds, and of the pack size among that kind's sizes, then the two multiplied, e.g. «бюрер (шанс 1.0%), кількість 1 (шанс 95%) — шанс саме «бюрер (1)»: 0.95%». Among all Zone events, that pack's chance is 25% times both. Chances under 1% keep two significant digits (0.25%, 0.00059%), so a rare event never reads 0.00%.
+The PDA line shows the chance of what happened, e.g. «шанс 50%». A mutant event shows two: the chance of the kind among all mutant kinds, and of the pack size among that kind's sizes, then the two multiplied, e.g. «бюрер (шанс 1.0%), кількість 1 (шанс 95%) — шанс саме «бюрер (1)»: 0.95%». Among all Zone events, that pack's chance is 50% times both. Chances under 1% keep two significant digits (0.25%, 0.00059%), so a rare event never reads 0.00%.
+
+**«Життя для Зони»** is its own reward, one the Zone event used to roll, and it works just the same: it joins the same queue with the same gap, and the PDA shows that the Zone heard it. A stalker appears 15–30 m away, half the time a friend who follows you (always a Loner), half an enemy of any faction (шанс 50%). He wears the viewer's nick until he dies, and a friend greets you first. If there's no room for him, the game tries again in 30 s. The **Test** button in its row fires it at once.
 
 After an event, one or two NPCs nearby react out loud: surprise, a joke, a curse or a warning. This works in Chat only mode too. Several events in a row get one reaction per 20 seconds.
 

@@ -31,8 +31,11 @@ REDEEMS = [
            "A viewer's message, said by an NPC near you. Needs a reward with a message and TWITCH_SOURCE=reward.",
            "on_twitch", kind="speech"),
     Redeem("zone", "TWITCH_ZONE_REWARD", "Zone event",
-           "Rolls a gift, a stalker friend or foe, or mutants. Queued, one per gap.",
+           "Rolls a gift or mutants, 50/50. Queued, one per gap.",
            "on_zone", kind="zone", extra=("TWITCH_ZONE_GAP", "TWITCH_ZONE_PACK_MAX")),
+    Redeem("life", "TWITCH_LIFE_REWARD", "Життя для Зони",
+           "A stalker turns up 15-30 m away with the viewer's nick: half the time a friend who follows you, "
+           "half an enemy.", "on_life"),
     Redeem("suslov", "TWITCH_SUSLOV_REWARD", "Шари Суслова",
            "Two «Вогняна куля» and a «Ковбаса» land on the ground in front of you.", "on_suslov"),
     Redeem("giant", "TWITCH_GIANT_REWARD", "Хуй будеш?",

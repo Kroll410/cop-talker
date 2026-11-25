@@ -489,9 +489,8 @@ class RedeemsTab(QWidget):
         lead.setObjectName("secondary")
         now.addWidget(lead)
         for text, arg, tip in (("Дар", "gift", "A random item in your backpack."),
-                               ("Життя", "life", "A random stalker, friend or enemy."),
                                ("Дитя", "child", "Mutants come for you."),
-                               ("Random", "any", "One of the three, rolled like a real redemption.")):
+                               ("Random", "any", "One of the two, rolled like a real redemption.")):
             btn = QPushButton(text)
             btn.setToolTip(tip + " Skips the queue.")
             btn.clicked.connect(lambda _=False, a=arg: self.test(a))

@@ -34,9 +34,9 @@ try:
     rolls = [zone.roll("v", rng=rng) for _ in range(40000)]
     kinds = Counter(r["kind"] for r in rolls)
     share = {k: kinds[k] / len(rolls) for k in kinds}
-    check(abs(share["gift"] - .25) < .015 and abs(share["life"] - .5) < .015 and abs(share["child"] - .25) < .015,
-          f"Дар 25%, Життя 50%, Дитя 25%: {share}")
-    sides = Counter(r["side"] for r in rolls if r["kind"] == "life")
+    check(abs(share["gift"] - .5) < .015 and abs(share["child"] - .5) < .015 and "life" not in share,
+          f"Дар 50%, Дитя 50%, never a stalker (his own reward): {share}")
+    sides = Counter(zone.roll("v", "life", rng)["side"] for _ in range(4000))
     check(abs(sides["ally"] / sum(sides.values()) - .5) < .02, f"Життя: half friends, half enemies {dict(sides)}")
     children = [r for r in rolls if r["kind"] == "child"]
     check(all(1 <= r["count"] <= zone.most(r["monster"]) for r in children),
@@ -97,8 +97,8 @@ try:
           "every kind: one more mutant halves the chance at least")
     check(c("сліпий пес", 5) * 20 < c("сліпий пес", 1) and c("сліпий пес", 3) * 4 < c("сліпий пес", 1),
           f"dogs: 1 {zone.pct(c('сліпий пес', 1))}, 3 {zone.pct(c('сліпий пес', 3))}, 5 {zone.pct(c('сліпий пес', 5))}")
-    check(abs(sum(c(m[0], n) for m in zone.MONSTERS for n in range(1, 11)) - 0.25) < 1e-9,
-          "all mutant outcomes add up to the 25% of Дитя Зони")
+    check(abs(sum(c(m[0], n) for m in zone.MONSTERS for n in range(1, 11)) - 0.5) < 1e-9,
+          "all mutant outcomes add up to the 50% of Дитя Зони")
 
     # the chance in the PDA line
     check(zone.pct(0.25) == "25%" and zone.pct(0.0412) == "4.1%" and zone.pct(0.0004) == "0.04%"
@@ -113,15 +113,15 @@ try:
     check(zone.pct(three_burers) != "0.00%" and float(zone.pct(three_burers)[:-1]) > 0,
           f"3 burers: {zone.pct(three_burers)}")
     life = zone.roll("V", "life", random.Random(1))
-    check(abs(life["chance"] - 0.25) < 1e-9 and "(шанс 25%)" in zone.command(life)[2], f"life: {zone.command(life)[2]}")
+    check(abs(life["chance"] - 0.5) < 1e-9 and "(шанс 50%)" in zone.command(life)[2], f"life: {zone.command(life)[2]}")
     # mutants: two rolls (who, then how many), two chances in the PDA line; together they make the exact chance
     kid = next(k for k in (zone.roll("V", "child", random.Random(s)) for s in range(500))
                if k["monster"] == "сліпий пес" and k["count"] == 3)
     text = zone.command(kid)[2]
     check(abs(zone.who_chance("сліпий пес") - 22 / 100) < 1e-12
           and abs(kid["count_chance"] - zone.count_chance("сліпий пес", 3)) < 1e-12
-          and abs(.25 * zone.who_chance("сліпий пес") * kid["count_chance"] - kid["chance"]) < 1e-12,
-          f"3 dogs: 25% Дитя x who x how many = the exact chance {kid}")
+          and abs(.5 * zone.who_chance("сліпий пес") * kid["count_chance"] - kid["chance"]) < 1e-12,
+          f"3 dogs: 50% Дитя x who x how many = the exact chance {kid}")
     check(text == "Зона народжує... сліпий пес (шанс 22%), кількість 3 (шанс 9.6%) — шанс саме «сліпий пес (3)»: 2.1%",
           f"child: {text}")
     check(all(abs(sum(zone.count_chance(m[0], n) for n in range(1, 11)) - 1) < 1e-9 for m in zone.MONSTERS)
@@ -134,7 +134,7 @@ try:
     q.items = [dict(kid, due=0)]
     check(q.summary(0)[0]["label"] == f"Дитя Зони: сліпий пес ×3 (22%, {zone.pct(kid['count_chance'])})",
           f"window: both chances {q.summary(0)[0]['label']}")
-    check("{chance:25}" in zone.command({"kind": "gift", "user": "V"})[2], "gift: the game divides 25% by its items")
+    check("{chance:50}" in zone.command({"kind": "gift", "user": "V"})[2], "gift: the game divides 50% by its items")
     for line in zone.command(kid):
         line.encode("cp1251")
 
@@ -188,6 +188,12 @@ try:
     q.items = []
     q.retry(dict(c, tries=0), 0)
     check(q.items[0]["side"] == side and q.items[0]["due"] == 30, "a retry keeps friend/enemy, 30 s later")
+    # Життя для Зони, its own reward now: queued like any Zone event, as before
+    qn = zone.ZoneQueue(tmp / "qn.json", (300, 420), random.Random(8))
+    e1 = qn.add("one", 1000)
+    ln = qn.add("life_guy", 1000, "life")
+    check(ln["kind"] == "life" and ln["side"] in ("ally", "enemy") and 300 <= ln["due"] - e1["due"] <= 420,
+          "life: waits its gap behind a Zone event, like before")
 
     # ------------------------------------------------------------ Twitch: which redemption goes where
     zoned, spoken = [], []
@@ -225,6 +231,15 @@ try:
     check(len(t.zone.items) == 2 and sent and sent[0][0] == "twitch" and "Зона почула тебе" in sent[0][2],
           f"redemption: queued, PDA notice {sent}")
     check("просто зараз" in sent[0][2] and "за ~" in sent[1][2], f"first: 'right now', second: 'in ~N min' {sent}")
+    # Життя для Зони, its own reward: the same queue and notice as the Zone event, always a stalker
+    t.on_life("Third")
+    life_item = t.zone.items[-1]
+    check(life_item["kind"] == "life" and life_item["user"] == "Third" and "Зона почула тебе" in sent[-1][2]
+          and life_item["due"] - t.zone.items[-2]["due"] >= 300, f"life reward: queued behind, PDA notice {life_item}")
+    check(talker.redeems.by_id("life").handler == "on_life" and "life" not in talker.NO_RETRY,
+          "life reward: its own redeem, tried again when the game has no room")
+    t.zone.items.pop()
+    sent.pop()
     sent.clear()
     state = {"mod_version": 14, "actor": {"health": 1}}
     t.zone_tick(state)

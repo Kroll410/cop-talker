@@ -3,10 +3,8 @@ happen in the game. Each redemption is rolled at once (so the window can show wh
 goes off at once; the ones behind it each wait 5-7 minutes (TWITCH_ZONE_GAP) after the one before. Gap 0: all at
 once, no waiting:
 
-  Дар Зони    (25%)  a random item of the game lands in your backpack
-  Життя для Зони (50%) a stalker appears 15-30 m away: half the time a friend who follows you (always a Loner),
-                     half an enemy of any faction; he wears the viewer's nickname until he dies
-  Дитя Зони   (25%)  mutants of one kind 25-50 m away come for you: mostly one or two; weak kinds come more
+  Дар Зони    (50%)  a random item of the game lands in your backpack
+  Дитя Зони   (50%)  mutants of one kind 25-50 m away come for you: mostly one or two; weak kinds come more
                      often and in bigger packs than strong ones (table MONSTERS, at most TWITCH_ZONE_PACK_MAX)
 
 Each PDA line shows the chance of what happened ("шанс 25%"), from the same weights that rolled it. Mutants are
@@ -14,6 +12,10 @@ rolled in two steps, who comes and then how many, and the line shows both, each 
 then how many of that kind ("кількість 1 (шанс 95%)"), and last the two multiplied, the chance of exactly that
 pack among mutant events: "шанс саме «бюрер (1)»: 0.95%". Тушкан comes up to 10 (OWN_MAX), the rest up to
 TWITCH_ZONE_PACK_MAX.
+
+Життя для Зони is a reward of its own (redeems.py, TWITCH_LIFE_REWARD), not rolled here: a stalker appears 15-30 m
+away, half the time a friend who follows you (always a Loner), half an enemy of any faction; he wears the viewer's
+nickname until he dies. It works just as before, in this same queue (gap, retries), only on its own reward.
 "python tools/zone_sim.py" checks every chance against a million real rolls.
 Run "python companion/zone.py [pack max]" to see the odds in plain numbers.
 
@@ -26,7 +28,7 @@ import re
 import threading
 from pathlib import Path
 
-KINDS = [("gift", 25), ("life", 50), ("child", 25)]
+KINDS = [("gift", 50), ("child", 50)]  # what the Zone event rolls ("life" is its own reward, not rolled)
 TITLES = {"gift": "Дар Зони", "life": "Життя для Зони", "child": "Дитя Зони"}
 
 # Дитя Зони, all its odds in one table:
@@ -102,11 +104,12 @@ def count_chance(monster, count, pack_max=PACK_MAX):
 
 def chance(item, pack_max=PACK_MAX):
     """How likely this exact outcome was when it was rolled (0..1). Gift: the chance of a gift at all (the game
-    picks the item and divides it by the number of items it has). Mutants: 25% x who x how many."""
+    picks the item and divides it by the number of items it has). Mutants: 50% x who x how many. Життя для Зони,
+    its own reward: friend or enemy, 50% each."""
+    if item["kind"] == "life":
+        return 0.5
     kinds = dict(KINDS)
     p = kinds[item["kind"]] / sum(kinds.values())
-    if item["kind"] == "life":
-        return p / 2
     if item["kind"] == "child":
         if not any(m[0] == item.get("monster") for m in MONSTERS):
             return p
