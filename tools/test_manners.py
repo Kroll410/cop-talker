@@ -7,8 +7,8 @@ import talker  # noqa: E402
 
 brain = talker.Brain()
 zhorka = {"id": 7, "name": "Жорка Адвокат", "community": "stalker", "rank": 300, "relation": "neutral", "dist": 2,
-          "voice": "characters_voice\human_02\stalker\\"}
-bandit = dict(zhorka, id=8, name="Сивий", community="bandit", voice="characters_voice\human_03\bandit\\")
+          "voice": "characters_voice\\human_02\\stalker\\"}
+bandit = dict(zhorka, id=8, name="Сивий", community="bandit", voice="characters_voice\\human_03\\bandit\\")
 state = {"level": "zaton", "hours": 15, "weather": "clear", "actor": {"weapon": "wpn_ak74", "money": 5000,
          "outfit": "stalker_outfit"}, "npcs": [zhorka, bandit]}
 out = open(Path(__file__).resolve().parent.parent / "test_result.txt", "w", encoding="utf-8")

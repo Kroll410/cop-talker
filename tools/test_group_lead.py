@@ -24,6 +24,7 @@ check("leader picked over higher rank", talker.Brain.group_lead(men) == 1)
 check("no leader: highest rank", talker.Brain.group_lead([dict(m, leader=False) for m in men]) == 2)
 
 brain = talker.Brain.__new__(talker.Brain)
+brain.news = type("N", (), {"mark_mentioned": lambda self, x: []})()  # set in Brain.__init__
 brain.vary_tags = lambda line: line
 talker.LLM_PROVIDER = "claude"
 seen_prompt = {}
@@ -77,6 +78,7 @@ check("group waits for the mutter to finish", took >= (ends["Лоцман"] - st
 # volume and overlap reach the voice
 calls = {}
 t2 = talker.Talker.__new__(talker.Talker)
+t2.brain = brain
 t2.spoken, t2.game = [], type("G", (), {"send": lambda self, *a: None, "distance_to": lambda self, i: 3})()
 t2.voice = type("V", (), {"say": lambda self, npc, line, **k: calls.update(k)})()
 talker.Talker.speak(t2, men[0], "Бурмоче.", aside=True)

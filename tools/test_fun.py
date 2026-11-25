@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "companion"))
 import talker  # noqa: E402
 
 brain = talker.Brain()
-v1, v2 = "characters_voice\human_01\stalker\\", "characters_voice\human_02\bandit\\"
+v1, v2 = "characters_voice\\human_01\\stalker\\", "characters_voice\\human_02\\bandit\\"
 a = {"id": 1, "name": "Лоцман", "story_name": "zat_sim_1", "community": "stalker", "rank": 400,
      "relation": "friend", "health": 1.0, "dist": 3, "voice": v1, "place": "zat_stalker_base_smart"}
 b = {"id": 2, "name": "Сивий", "story_name": "zat_sim_2", "community": "bandit", "rank": 300,

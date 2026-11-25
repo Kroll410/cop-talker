@@ -13,15 +13,20 @@ out = open(Path(__file__).resolve().parent.parent / "test_result.txt", "w", enco
 said = []
 t = talker.Talker.__new__(talker.Talker)
 t.busy, t.recording, t.twitch, t.twitch_queue, t.next_twitch_note, t.spoken = threading.Lock(), False, None, [], 0, []
+import tempfile  # noqa: E402
+talker.MEMORY_FILE = Path(tempfile.mkdtemp()) / "memory.json"  # never the player's real NPC memory
+talker.CLEAR_MEMORY = False
 t.brain, t.memory = talker.Brain(), talker.Memory()
+t.twitch_links, t.twitch_names, t.left_npc, t.zone_links, t.next_link_sync = {}, {}, {}, set(), 0  # Talker.__init__
+t.save_links = lambda: None
 t.game = type("G", (), {"send": lambda self, *a: None, "distance_to": lambda self, i: 3,
                         "last_used_npc": (None, 0)})()
-t.voice = type("V", (), {"say": lambda self, npc, line, current_dist=None, on_start=None: said.append((npc["name"], line))})()
-v1, v2, v3 = ("characters_voice\human_0%d\stalker\\" % i for i in (1, 2, 3))
+t.voice = type("V", (), {"say": lambda self, npc, line, current_dist=None, on_start=None, **k: said.append((npc["name"], line))})()
+v1, v2, v3 = ("characters_voice\\human_0%d\\stalker\\" % i for i in (1, 2, 3))
 men = [{"id": 1, "name": "Лоцман", "community": "stalker", "rank": 400, "relation": "friend", "dist": 4, "voice": v1},
        {"id": 2, "name": "Кастет", "community": "stalker", "rank": 300, "relation": "neutral", "dist": 6, "voice": v2},
        {"id": 3, "name": "Сивий", "community": "bandit", "rank": 300, "relation": "neutral", "dist": 8,
-        "voice": "characters_voice\human_03\bandit\\"},
+        "voice": "characters_voice\\human_03\\bandit\\"},
        {"id": 4, "name": "Нік Хохмач", "community": "stalker", "rank": 200, "relation": "friend", "dist": 5, "voice": v3}]
 state = {"level": "zaton", "hours": 20, "weather": "clear", "actor": {}, "npcs": men}
 

@@ -52,6 +52,12 @@ ok &= check(all("react" in x and not talker.SLUR_STEMS.search(x) for x in notes)
             "SLURS=0: no slur words in anyone's prompt, but they still react to one")
 ok &= check("surzhyk" in talker.npc_brief(bandit) and not talker.SLUR_STEMS.search(talker.npc_brief(bandit)),
             "SLURS=0: a bandit still talks surzhyk, without slurs")
+tw = talker.Talker.__new__(talker.Talker)
+tw.twitch_queue, tw.twitch = [], None
+tw.on_twitch("viewer", "$Лоцман, ти підорлик", None)
+tw.on_twitch("viewer", "$Лоцман, ти молодець", None)
+ok &= check([x[1] for x in tw.twitch_queue] == ["Лоцман, ти молодець"],
+            f"SLURS=0: a chat message with a slur is skipped, not said word for word {tw.twitch_queue}")
 talker.SLURS = True
 ok &= check(not talker.has_slur("Ти жид, братан", bandit), "SLURS=1 again: a bandit may")
 

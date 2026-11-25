@@ -14,6 +14,9 @@ sys.path.insert(0, str(ROOT / "tools"))
 import talker  # noqa: E402
 import xdb_unpack as x  # noqa: E402
 
+if len(sys.argv) < 2:  # a manual tool: needs the voice archive
+    print("usage: python tools/test_stt.py <xukrainian.db>  (skipped: no archive given)")
+    sys.exit(0)
 archive = sys.argv[1]
 data = open(archive, "rb").read()
 lines = []

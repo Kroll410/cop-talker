@@ -9,7 +9,7 @@ import talker  # noqa: E402
 talker.OUTSIDE_TALK = 1.0  # every idle line about the outside, to see them
 brain = talker.Brain()
 brain.news.update()
-v = "characters_voice\human_0%d\stalker\\"
+v = "characters_voice\\human_0%d\\stalker\\"
 men = [{"id": i, "name": n, "community": "stalker", "rank": 300, "relation": "neutral", "dist": 3, "voice": v % (i % 3 + 1),
         "story_name": f"t{i}"} for i, n in enumerate(["Жорка Адвокат", "Лоцман", "Кастет"], 1)]
 state = {"level": "zaton", "hours": 21, "weather": "clear", "actor": {"weapon": "wpn_ak74", "outfit": "stalker_outfit"},

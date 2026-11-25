@@ -3829,7 +3829,8 @@ class Talker:
                     self.twitch.finish(redemption, spoken=False)  # a reward without $ or %: refund the points
                 return
         text = chat_text(re.sub(r"https?://\S+|www\.\S+", "", text))[:200]
-        if not text or any(w in text.lower() for w in TWITCH_BLOCKED):
+        # SLURS=0: no NPC says one, not even word for word from chat
+        if not text or any(w in text.lower() for w in TWITCH_BLOCKED) or (not SLURS and SLUR_STEMS.search(text)):
             log(f"Twitch: skipped a message from {user}")
             if self.twitch:
                 self.twitch.finish(redemption, spoken=False)  # refunds the points
@@ -3856,7 +3857,9 @@ class Talker:
         need: the game script version it needs."""
         state = self.game.state()
         have = (state or {}).get("mod_version") or 0
-        if not state:
+        # the process check (every 3 s) first: state.json stays on disk after the game is closed, and a line sent
+        # then would be deleted unread when the game starts again (a leftover inbox)
+        if not state or getattr(self, "game_on", None) is False:
             why = "the game isn't running (or no save is loaded)"
         elif have < need:
             why = (f"the game runs an old copy of the mod (v{have}, this needs v{need}): press Reinstall game mod, "

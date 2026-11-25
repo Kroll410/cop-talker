@@ -7,15 +7,15 @@ import talker  # noqa: E402
 
 brain = talker.Brain()
 bandit = {"id": 3, "name": "Сивий", "community": "bandit", "rank": 400, "relation": "neutral", "dist": 2,
-          "voice": "characters_voice\human_03\bandit\\"}
+          "voice": "characters_voice\\human_03\\bandit\\"}
 merc = {"id": 5, "name": "Кремінь", "community": "killer", "rank": 600, "relation": "neutral", "dist": 3,
-        "voice": "characters_voice\human_02\stalker\\"}
+        "voice": "characters_voice\\human_02\\stalker\\"}
 lots = {"id": 1, "name": "Лоцман", "community": "stalker", "rank": 400, "relation": "friend", "dist": 4,
-        "voice": "characters_voice\human_01\stalker\\"}
+        "voice": "characters_voice\\human_01\\stalker\\"}
 kostet = {"id": 2, "name": "Кастет", "community": "stalker", "rank": 300, "relation": "neutral", "dist": 12,
-          "voice": "characters_voice\human_02\stalker\\"}
+          "voice": "characters_voice\\human_02\\stalker\\"}
 boroda = {"id": 9, "name": "Борода", "community": "stalker", "rank": 900, "relation": "friend", "dist": 15,
-          "story": True, "voice": "characters_voice\human_01\stalker\\"}
+          "story": True, "voice": "characters_voice\\human_01\\stalker\\"}
 rich = {"level": "zaton", "hours": 22, "weather": "clear", "actor": {"weapon": "wpn_ak74", "money": 15000},
         "npcs": [bandit, merc, lots, kostet, boroda]}
 poor = dict(rich, actor={"weapon": "wpn_ak74", "money": 300})

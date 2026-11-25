@@ -53,6 +53,11 @@ sent.clear()
 state["actor"]["health"] = 0
 t.on_suslov("Vasyl_77")
 check(not sent, "player dead: nothing sent")
+state["actor"]["health"] = 1
+t.game_on = False  # the game was closed: state.json is still there from the last session
+t.on_suslov("Vasyl_77")
+check(not sent, "game closed (old state.json still on disk): nothing sent, it would be lost")
+t.game_on = True
 
 what = talker.Talker.zone_what(t, "suslov", {})
 check("dick" in what and "laugh" in what, "the men around are told what lies there and to laugh")

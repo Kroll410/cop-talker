@@ -7,9 +7,9 @@ import talker  # noqa: E402
 
 brain = talker.Brain()
 bandit = {"id": 3, "name": "Сивий", "community": "bandit", "rank": 400, "relation": "neutral", "dist": 2,
-          "voice": "characters_voice\human_03\bandit\\", "place": "zat_stalker_base_smart"}
+          "voice": "characters_voice\\human_03\\bandit\\", "place": "zat_stalker_base_smart"}
 kostet = {"id": 2, "name": "Кастет", "community": "stalker", "rank": 300, "relation": "neutral", "dist": 9,
-          "voice": "characters_voice\human_02\stalker\\", "place": "zat_stalker_base_smart"}
+          "voice": "characters_voice\\human_02\\stalker\\", "place": "zat_stalker_base_smart"}
 state = {"level": "zaton", "hours": 19, "weather": "clear", "actor": {}, "npcs": [bandit, kostet]}
 out = open(Path(__file__).resolve().parent.parent / "test_result.txt", "w", encoding="utf-8")
 for _ in range(2):

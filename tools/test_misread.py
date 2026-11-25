@@ -7,9 +7,9 @@ import talker  # noqa: E402
 
 brain = talker.Brain()
 pasha = {"id": 5, "name": "Паша Самогон", "community": "stalker", "rank": 300, "relation": "neutral", "dist": 2,
-         "voice": "characters_voice\human_01\stalker\\"}
+         "voice": "characters_voice\\human_01\\stalker\\"}
 grishka = {"id": 6, "name": "Грішка", "community": "stalker", "rank": 200, "relation": "neutral", "dist": 15,
-           "voice": "characters_voice\human_02\stalker\\"}
+           "voice": "characters_voice\\human_02\\stalker\\"}
 state = {"level": "zaton", "hours": 16, "weather": "clear", "actor": {"weapon": "wpn_ak74", "money": 5000,
          "outfit": "stalker_outfit"}, "npcs": [pasha, grishka]}
 out = open(Path(__file__).resolve().parent.parent / "test_result.txt", "w", encoding="utf-8")

@@ -12,10 +12,16 @@ said = []
 t = talker.Talker.__new__(talker.Talker)
 t.busy, t.recording, t.twitch, t.twitch_queue, t.next_twitch_note, t.spoken = threading.Lock(), False, None, [], 0, []
 t.brain = talker.Brain()
-t.game = type("G", (), {"send": lambda self, *a: said.append(("GAME",) + a), "distance_to": lambda self, i: 3})()
-t.voice = type("V", (), {"say": lambda self, npc, line, current_dist=None, on_start=None: (
+t.memory = type("M", (), {"remembers": lambda self, k: "", "said": lambda self, *a, **k: None})()
+t.npc_key = lambda n, s: n["name"]
+t.recent_lines = lambda: []
+t.twitch_links, t.twitch_names, t.left_npc, t.zone_links, t.next_link_sync = {}, {}, {}, set(), 0  # Talker.__init__
+t.save_links = lambda: None
+t.game = type("G", (), {"send": lambda self, *a: said.append(("GAME",) + a), "distance_to": lambda self, i: 3,
+                        "describe_events": lambda self, *a: ""})()
+t.voice = type("V", (), {"say": lambda self, npc, line, current_dist=None, on_start=None, **k: (
     on_start and on_start(), said.append((npc["name"], line)))})()
-v = "characters_voice\human_01\stalker\\"
+v = "characters_voice\\human_01\\stalker\\"
 lots = {"id": 1, "name": "Лоцман", "community": "stalker", "rank": 400, "relation": "friend", "dist": 4, "voice": v}
 kost = {"id": 2, "name": "Кастет", "community": "stalker", "rank": 300, "relation": "neutral", "dist": 6, "voice": v}
 state = {"level": "zaton", "hours": 14, "weather": "clear", "actor": {}, "npcs": [lots, kost]}

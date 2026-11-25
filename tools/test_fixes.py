@@ -31,6 +31,7 @@ ask("talking to enemy", enemy, base, "Гей, кабане, давай пого�
 
 g = talker.Game.__new__(talker.Game)
 g.last_used_npc = (None, 0)
+g.last_spoke_to_player = (None, 0.0, "")  # set in Game.__init__
 state = dict(base, target_id=81, npcs=[
     {"id": 80, "name": "Гонта", "dist": 2.5, "relation": "neutral"},
     {"id": 81, "name": "Кіт", "dist": 4.0, "relation": "neutral"},

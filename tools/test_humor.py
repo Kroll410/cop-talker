@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "companion"))
 import talker  # noqa: E402
 
 brain = talker.Brain()
-v = "characters_voice\human_0%d\stalker\\"
+v = "characters_voice\\human_0%d\\stalker\\"
 men = [{"id": i, "name": n, "community": "stalker", "rank": 300, "relation": "neutral", "dist": 3, "voice": v % (i % 3 + 1),
         "story_name": f"t{i}"} for i, n in enumerate(["Жорка Адвокат", "Лоцман", "Кастет"], 1)]
 state = {"level": "zaton", "hours": 21, "weather": "clear", "actor": {"weapon": "wpn_ak74", "outfit": "stalker_outfit"},

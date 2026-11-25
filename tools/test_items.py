@@ -9,7 +9,7 @@ brain = talker.Brain()
 stock = ["Аптечка x12 ~300 #medkit", "Бинт x20 ~150 #bandage", "Горілка «Козаки» x8 ~120 #vodka",
          "Ковбаса «Дієтична» x10 ~100 #sausage", "Детектор «Відгук» x1 ~2500 #detector_advanced"]
 boroda = {"id": 9, "name": "Борода", "community": "stalker", "rank": 900, "relation": "friend", "dist": 2,
-          "story": True, "stock": stock, "voice": "characters_voice\human_01\stalker\\"}
+          "story": True, "stock": stock, "voice": "characters_voice\\human_01\\stalker\\"}
 state = {"level": "zaton", "hours": 20, "weather": "clear", "actor": {"weapon": "wpn_ak74", "money": 5000,
          "outfit": "stalker_outfit"}, "npcs": [boroda]}
 out = open(Path(__file__).resolve().parent.parent / "test_result.txt", "w", encoding="utf-8")
