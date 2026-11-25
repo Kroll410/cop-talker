@@ -4147,6 +4147,22 @@ class Talker:
             self.zone_reported = text
             report("ZONE", text)
 
+    def clear_twitch_queue(self):
+        """Drop every viewer message still waiting (the one being said right now finishes). Speech-reward
+        redemptions among them are refunded where the app can (only rewards it owns)."""
+        dropped = self.twitch_queue[:]
+        for item in list(dropped):  # one by one: a message arriving meanwhile stays
+            try:
+                self.twitch_queue.remove(item)
+            except ValueError:  # just taken by an NPC
+                dropped.remove(item)
+        for _user, _text, redemption, _mode in dropped:
+            if self.twitch:
+                self.twitch.finish(redemption, spoken=False)
+        log(f"Twitch: queue cleared, {len(dropped)} waiting message(s) dropped")
+        report("TWITCH_QUEUE", str(len(self.twitch_queue)))
+        return len(dropped)
+
     def twitch_speak(self, state):
         """Give the oldest viewer message to a random NPC nearby; if nobody is around, wait for one."""
         if not self.twitch_queue or self.busy.locked() or self.recording:
@@ -4462,6 +4478,8 @@ class Talker:
                         break
                     if line.strip() == "rewards":  # the window's Refresh next to a reward title
                         threading.Thread(target=self.report_rewards, daemon=True).start()
+                    if line.strip() == "twitchclear":  # the window's Clear next to "Waiting messages"
+                        threading.Thread(target=self.clear_twitch_queue, daemon=True).start()
                     if line.startswith("zone"):  # the window's debug buttons
                         arg = line.split()[-1]
                         who = (self.twitch.login if self.twitch and self.twitch.login else None) or "test"

@@ -110,6 +110,8 @@ In chat:
 
 A viewer gets linked to a free NPC within `TWITCH_DISTANCE`. If that NPC dies, the link goes; the viewer gets a new one with his next message. Nobody's NPC is taken from them. Links can be turned off (`TWITCH_LINKS=0`): then any NPC nearby says each message, with no nick labels.
 
+Messages wait in a queue until an NPC is near (at most `TWITCH_QUEUE_MAX`; the oldest are dropped). The Twitch tab shows how many are waiting; **Clear queue** next to it drops them all except the one being said.
+
 ### Rewards
 
 Channel-point rewards need Affiliate or Partner. The app never adds rewards to your channel: you make each one on Twitch yourself, with no message unless noted, and pick it in its row on the **Redeems** tab (**Refresh rewards** lists the channel's rewards; you can also type the title). Each row shows what the reward does, whether it's on, and a **Test** button that runs it without points. If a reward you picked isn't on the channel, the Twitch tab's status says so, and the app waits until you make it.

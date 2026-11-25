@@ -590,6 +590,14 @@ class Window(QMainWindow):
         self.twitch_state.setWordWrap(True)
         self.twitch_queue = QLabel("Waiting messages: 0")
         self.twitch_queue.setObjectName("secondary")
+        clear = self.twitch_clear_btn = QPushButton("Clear queue")
+        clear.setToolTip("Drops every chat message still waiting to be said (the one being said now finishes).")
+        clear.setEnabled(False)
+        clear.clicked.connect(self.clear_twitch_queue)
+        queue_row = QHBoxLayout()
+        queue_row.addWidget(self.twitch_queue)
+        queue_row.addWidget(clear)
+        queue_row.addStretch()
         self.twitch_code = QPushButton("")
         self.twitch_code.setObjectName("primary")
         self.twitch_code.hide()
@@ -624,7 +632,7 @@ class Window(QMainWindow):
         guide.setWordWrap(True)
         guide.setMaximumWidth(760)
         tl.addWidget(self.twitch_state)
-        tl.addWidget(self.twitch_queue)
+        tl.addLayout(queue_row)
         tl.addLayout(auth_row)
         tl.addWidget(self.twitch_code)
         tl.addWidget(guide)
@@ -711,6 +719,11 @@ class Window(QMainWindow):
             return False
         self.proc.write(b"rewards" + bytes([10]))
         return True
+
+    def clear_twitch_queue(self):
+        """Ask the helper to drop the waiting chat messages; it answers with @TWITCH_QUEUE."""
+        if self.proc:
+            self.proc.write(b"twitchclear\n")
 
     def send_zone(self, arg):
         """Test: the helper fires a redeem (or queues a Zone event) as if a viewer redeemed it. False: not running."""
@@ -803,6 +816,7 @@ class Window(QMainWindow):
             self.redeems.zone_queue.setText("\n".join(lines) if lines else "Nothing waiting")
         elif kind == "TWITCH_QUEUE":
             self.twitch_queue.setText(f"Waiting messages: {text}")
+            self.twitch_clear_btn.setEnabled(text.strip() not in ("", "0"))
         elif kind == "TWITCH_CODE":
             url, _, code = text.partition("|")
             self.twitch_code.setText(f"Sign in to Twitch: open {url} and enter code {code}")
