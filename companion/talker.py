@@ -246,21 +246,6 @@ TWITCH_DISTANCE = float(os.environ.get("TWITCH_DISTANCE", "25"))
 TWITCH_SHOW_NAME = os.environ.get("TWITCH_SHOW_NAME", "1") != "0"
 # Each viewer keeps his own NPC (nick label in game, "%%" lets go); 0 = any NPC nearby says each message
 TWITCH_LINKS = os.environ.get("TWITCH_LINKS", "1") != "0"
-
-
-def seconds_range(text, default=(0.5, 3.0)):
-    """"0.5-3" -> (0.5, 3.0); one number = exactly that; nothing readable = default."""
-    nums = [float(x) for x in re.findall(r"\d+(?:[.,]\d+)?", (text or "").replace(",", "."))]
-    if not nums:
-        return default
-    return min(nums[0], nums[-1]), max(nums[0], nums[-1])
-
-
-# Several waiting viewer messages at once, each said by a different NPC nearby; 1 = one after another
-TWITCH_PARALLEL = max(1, int(os.environ.get("TWITCH_PARALLEL", "3") or 3))
-# each of those starts after a random pause from this range (seconds), so the lines overlap naturally
-TWITCH_PARALLEL_DELAY = seconds_range(os.environ.get("TWITCH_PARALLEL_DELAY", "0.5-3"))
-TWITCH_BRAIN_LOCK = threading.Lock()  # "%" retellings written at once: each reads its own gesture back
 TWITCH_BLOCKED = [w.strip().lower() for w in os.environ.get("TWITCH_BLOCKED", "").split(",") if w.strip()]
 # Zone events: the title of a channel-points reward you made on Twitch (no message). Empty = off.
 TWITCH_ZONE_REWARD = os.environ.get("TWITCH_ZONE_REWARD", "").strip()
@@ -3114,13 +3099,11 @@ class Talker:
         """The gesture the AI put in the line it just wrote for this NPC, if any."""
         self.gesture(npc, next((arg for kind, arg in self.brain.last_extras if kind == "emote"), None))
 
-    def speak(self, npc, line, state=None, pda_text=None, note=None, aside=False, on_start=None, look_at=None,
-              overlap=False):
+    def speak(self, npc, line, state=None, pda_text=None, note=None, aside=False, on_start=None, look_at=None):
         """Voice + subtitle of one line, the subtitle appearing right as the voice starts.
         note: also keep the line in his memory, e.g. "(to Лоцман)" (talks with the player are kept elsewhere).
         aside: a quieter mutter that may play over someone else's line. on_start() runs when the voice starts.
-        look_at: the NPC he says it to: they turn to face each other while he talks (game script v13+).
-        overlap: full volume, but played over whatever else is playing (viewer lines said at the same time)."""
+        look_at: the NPC he says it to: they turn to face each other while he talks (game script v13+)."""
         # a bandit's surzhyk keeps its Russian words; everyone else's stray Russian letters become Ukrainian
         fix = fix_factions if npc.get("community") == "bandit" else (lambda t: ukrainian_letters(fix_factions(t)))
         line, pda_text = fix(line), fix(pda_text)
@@ -3159,7 +3142,7 @@ class Talker:
                 on_start()
 
         self.voice.say(npc, line, current_dist=lambda: self.game.distance_to(npc["id"]), on_start=started,
-                       volume=GROUP_ASIDE_VOLUME if aside else 1.0, overlap=aside or overlap)
+                       volume=GROUP_ASIDE_VOLUME if aside else 1.0, overlap=aside)
         report("USAGE", USAGE.summary())
         return plain
 
@@ -4237,72 +4220,7 @@ class Talker:
                 self.next_twitch_note = time.time() + 120
                 log(f"Twitch: {len(self.twitch_queue)} message(s) waiting for someone to come close")
             return False
-        if TWITCH_PARALLEL > 1:
-            return self.twitch_speak_parallel(state, npcs)
         item = self.twitch_queue.pop(0)
-        npc, named = self.twitch_pick(item, npcs)
-        threading.Thread(target=self._twitch_line, args=(npc, state, item, named), daemon=True).start()
-        return True
-
-    def twitch_speak_parallel(self, state, npcs):
-        """TWITCH_PARALLEL > 1: up to that many waiting messages at once, each by a different NPC, each after its
-        own random pause. The whole batch holds `busy`, so the player's words wait for it like for one line."""
-        if not self.busy.acquire(blocking=False):
-            return False
-        jobs, used = [], set()
-        try:
-            for item in list(self.twitch_queue):
-                if len(jobs) >= TWITCH_PARALLEL:
-                    break
-                link = self.twitch_links.get(item[0].lower()) if TWITCH_LINKS else None
-                if link is not None and link in used:  # his man is already saying another of his messages
-                    continue
-                free = [n for n in npcs if n.get("id") not in used]
-                if not free:
-                    break
-                npc, named = self.twitch_pick(item, free)
-                if npc is None and named is None:  # only men already talking are around: next batch
-                    continue
-                self.twitch_queue.remove(item)
-                used.update(n.get("id") for n in (npc, named) if n is not None)
-                jobs.append((npc, item, named))
-        except Exception:
-            self.busy.release()
-            raise
-        if not jobs:
-            self.busy.release()
-            return False
-        log(f"Twitch: {len(jobs)} message(s) at once")
-        report("TWITCH_QUEUE", str(len(self.twitch_queue)))
-        threading.Thread(target=self._twitch_batch, args=(jobs, state), daemon=True).start()
-        return True
-
-    def _twitch_batch(self, jobs, state):
-        """Say the batch's lines together; `busy` is let go once the last of them (and its answers) is done."""
-        try:
-            threads = [threading.Thread(target=self._twitch_parallel_line, daemon=True,
-                                        args=(npc, state, item, named, random.uniform(*TWITCH_PARALLEL_DELAY)))
-                       for npc, item, named in jobs]
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(180)
-        finally:
-            self.busy.release()
-            report("TWITCH_QUEUE", str(len(self.twitch_queue)))
-
-    def _twitch_parallel_line(self, npc, state, item, named, delay):
-        end = time.time() + delay
-        while time.time() < end:
-            if self.recording:  # the player started talking before this line began: it waits for the next batch
-                self.twitch_queue.insert(0, item)
-                return
-            time.sleep(min(0.05, max(0.0, end - time.time())))
-        self._twitch_say(npc, state, item, named, overlap=True)
-
-    def twitch_pick(self, item, npcs):
-        """Who says this viewer message: (the NPC who says it, the stalker it names). The NPC is None when only
-        the named stalker is around (he answers it himself); both None when nobody can say it."""
         user = item[0]
         named = [n for n in npcs if mentions(n, item[1])]
         others = [n for n in npcs if n not in named]
@@ -4328,7 +4246,9 @@ class Talker:
                 self.link_viewer(user, npc)
             else:  # every man around already speaks for a viewer: borrow one for this message, take nobody's man
                 npc = random.choice(others) if others else None
-        return npc, named[0] if named else None
+        threading.Thread(target=self._twitch_line, args=(npc, state, item, named[0] if named else None),
+                         daemon=True).start()
+        return True
 
     def unlink_viewer(self, user):
         """The viewer asked to be let go from his NPC ("%%"): the label goes, and his next message is said by
@@ -4407,19 +4327,10 @@ class Talker:
                 self.game.send("link", npc_id, self.twitch_names.get(key, key))
 
     def _twitch_line(self, npc, state, item, named=None):
+        user, text, redemption, mode = item
         if not self.busy.acquire(blocking=False):
             self.twitch_queue.insert(0, item)
             return
-        try:
-            self._twitch_say(npc, state, item, named)
-        finally:
-            self.busy.release()
-            report("TWITCH_QUEUE", str(len(self.twitch_queue)))
-
-    def _twitch_say(self, npc, state, item, named=None, overlap=False):
-        """One viewer message, said (and answered). overlap: other viewers' lines play at the same time
-        (TWITCH_PARALLEL), so whoever answers waits until this line has ENDED, not just started."""
-        user, text, redemption, mode = item
         try:
             if npc is None:
                 # Only the named stalker is around: he answers the viewer's words himself, as if said to him.
@@ -4430,17 +4341,15 @@ class Talker:
                 if reply:
                     log(f"  {named.get('name')} answers: {reply}")
                     self.brain_gesture(named)
-                    self.speak(named, reply, state, note=f"(answering Twitch viewer {user})", overlap=overlap)
+                    self.speak(named, reply, state, note=f"(answering Twitch viewer {user})")
             else:
                 line, emote = text, hint_emote(text)  # word for word: a gesture only if the words call for one
                 if mode == "character":
-                    with TWITCH_BRAIN_LOCK:
-                        retold = self.brain.reply(npc, state, "", [], "", "twitch", extra={"text": text},
-                                                  remembers=self.memory.remembers(self.npc_key(npc, state)))
-                        extras = list(self.brain.last_extras)
+                    retold = self.brain.reply(npc, state, "", [], "", "twitch", extra={"text": text},
+                                              remembers=self.memory.remembers(self.npc_key(npc, state)))
                     if retold:
                         line = retold
-                        emote = next((arg for kind, arg in extras if kind == "emote"), None)
+                        emote = next((arg for kind, arg in self.brain.last_extras if kind == "emote"), None)
                 log(f"Twitch ({user}) via {npc.get('name')}: {line}")
                 # Whoever answers him is written NOW, while his line plays, and speaks the moment it ends.
                 started, follow, heard = threading.Event(), None, []
@@ -4465,8 +4374,8 @@ class Talker:
                 self.gesture(npc, emote)
                 # PDA: under the NPC's name and portrait, "[nickname] what he says"
                 self.speak(npc, line, state, pda_text=f"[{user}] {strip_tags(line)}" if TWITCH_SHOW_NAME else None,
-                           note=f"(voicing Twitch viewer {user})", on_start=None if overlap else started.set,
-                           look_at=named or (face[0] if face else None), overlap=overlap)
+                           note=f"(voicing Twitch viewer {user})", on_start=started.set,
+                           look_at=named or (face[0] if face else None))
                 started.set()
                 if follow:
                     follow.join(90)
@@ -4477,6 +4386,9 @@ class Talker:
         except Exception as exc:
             log(f"twitch line error: {exc!r}")
             self.twitch_queue.insert(0, item)
+        finally:
+            self.busy.release()
+            report("TWITCH_QUEUE", str(len(self.twitch_queue)))
 
     def group_answer(self, state, said, speaker, from_player=False, exclude=None, speaker_npc=None, after=None,
                      kind="talk"):

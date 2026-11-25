@@ -127,7 +127,6 @@ NICE = {"STALKER_DIR": "Game folder", "SPEAK_MODE": "Speaking", "PTT_KEY": "Push
         "CLEAR_MEMORY": "Clear memory on start", "OUTSIDE_TALK": "Talk about life outside", "NEWS_FEEDS": "News feeds",
         "TWITCH_ENABLED": "Twitch", "TWITCH_SOURCE": "Source", "TWITCH_CHANNEL": "Channel",
         "TWITCH_QUEUE_MAX": "Messages waiting, at most", "TWITCH_REWARD": "Speech reward title",
-        "TWITCH_PARALLEL": "Messages said at once", "TWITCH_PARALLEL_DELAY": "Pause before each, seconds",
         "TWITCH_UNPREFIXED": "Messages without $ or %", "TWITCH_DISTANCE": "NPC distance",
         "TWITCH_SHOW_NAME": "Nick in the PDA", "TWITCH_LINKS": "Viewer keeps his NPC", "TWITCH_BLOCKED": "Blocked words",
         "LLM_PROVIDER": "Replies by", "CLAUDE_MODEL": "Claude model", "CLAUDE_CLI": "Claude Code program",
