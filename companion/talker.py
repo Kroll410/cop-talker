@@ -791,6 +791,25 @@ def find_stock_item(stock, wanted):
     return None
 
 
+def mentioned_stock(stock, text):
+    """The one thing from this stock the words are about ("ковбасу" -> "Ковбаса «Дієтична»"), by word stems;
+    None when none or several different things are named."""
+    said = {w[:5] for w in re.findall(r"\w+", clean_game_text(text or "").lower()) if len(w) > 3}
+    hits = {}
+    for entry in stock or []:
+        head, _, section = str(entry).partition(" #")
+        name = clean_game_text(re.sub(r"\s+x\d+.*$", "", head)).strip()
+        stems ={w[:5] for w in re.findall(r"\w+", name.lower()) if len(w) > 3}
+        if stems & said:
+            hits[section.strip()] = name
+    return next(iter(hits.values())) if len(hits) == 1 else None
+
+
+# A price said for each one, not for all of them: "сорок за штуку", "по 50", "кожна по сотні"
+PER_ITEM = re.compile(r"за штук|штука|штучк|кожн|поштучно|(?<!\w)по\s+(?:\d|сорок|сто|сотн|двісті|триста|\w*десят|"
+                      r"\w*дцят|п.ять|шість|сім|вісім)", re.I)
+
+
 def trim_reply(text, player_text, mode):
     """Hard limit on rambling: an answer to a few words keeps only its first sentence, other answers at most
     three sentences. Jokes and stories asked for are left whole."""
@@ -942,7 +961,10 @@ TRADE_WORDS = re.compile(r"подаруй|подаруєш|позич|відда
 # The player wants to sell HIS things to the NPC.
 SELL_WORDS = re.compile(r"продам|продаю|продати тобі|продам тобі|купиш|купите|купи в мене|купи у мене|купить у мене|"
                         r"візьмеш|візьми в мене|візьми у мене|скупа|скупову|здам|здати|здаю|хочеш купити|"
-                        r"цікавить .*(?:купити|взяти)|маю на продаж|є на продаж у мене|у мене є .* (?:купиш|треба)",
+                        r"цікавить .*(?:купити|взяти)|маю на продаж|є на продаж у мене|у мене є .* (?:купиш|треба)|"
+                        # "хочу продати ковбасу", "візьми мою ковбасу", "купи мої патрони", "забери мою горілку"
+                        r"(?:хочу|можу|треба|давай|готовий|збираюсь) продати|продати (?:вам|йому)|"
+                        r"(?:візьми|візьміть|купи|купіть|забери|заберіть)\s+(?:\S+\s+)?(?:мо[юїєя]|мій|моє)(?!\w)",
                         re.I)
 # The player asks to BUY from the NPC (so in a sell talk, a charge can still be right).
 BUY_ASK = re.compile(r"продай|продаси|продасте|почім|куплю в тебе|куплю у тебе|купити в тебе|купити у тебе|"
@@ -950,10 +972,15 @@ BUY_ASK = re.compile(r"продай|продаси|продасте|почім|�
 
 
 def selling_context(player_text, history):
-    """Is the player selling his things in this exchange (now or in the last turn)?"""
-    last = list(history or [])[-1:] or [{}]
-    said = " ".join([player_text or "", str(last[0].get("player", ""))])
-    return bool(SELL_WORDS.search(said))
+    """Is the player selling his things in this talk? His last few lines count ("Хочу продати ковбасу" -
+    "Скільки даси?" - "По руках"), newest first, until one where he asks to buy instead."""
+    lines = [player_text or ""] + [str(h.get("player", "")) for h in reversed(list(history or [])[-3:])]
+    for said in lines:
+        if SELL_WORDS.search(said):
+            return True
+        if BUY_ASK.search(said):
+            return False
+    return False
 
 
 TASK_WORDS = re.compile(r"завданн|робот|доручен|квест|допомог|що робити|куди (йти|піти)|замовленн|шукаю", re.I)
@@ -1762,12 +1789,23 @@ class Brain:
                                 if k != "take" or limit > 0]
             if wanted_pay and not any(k == "take" for k, _ in self.last_extras):  # price not agreed yet
                 self.last_extras = [e for e in self.last_extras if e[0] != "item"]
+            selling = selling_context(player_text, history)
+            if selling and not any(k == "buy" for k, _ in self.last_extras):
+                # he "pays" for the player's thing with the give tag: the money would come and the item stay;
+                # when the talk names one thing of the player's, it's a buy of that thing
+                gives = [a for k, a in self.last_extras if k == "give"]
+                last = (history or [{}])[-1] if history else {}
+                sold = mentioned_stock((state.get("actor") or {}).get("stock") or []," ".join([player_text or "", str(last.get("player", "")),
+                                                              str(last.get("npc", "")), strip_tags(text)]))
+                if gives and sold:
+                    log(f"{npc.get('name')}: paid with give for your {sold}, made it a buy")
+                    self.last_extras = [e for e in self.last_extras if e[0] != "give"] + [("buy", (sold, gives[0]))]
             if any(k in ("item", "buy") for k, _ in self.last_extras):  # goods never come with free money too
                 self.last_extras = [e for e in self.last_extras if e[0] != "give"]
             self.last_extras = self.settle_buys(self.last_extras, player_text, history)
             # The player is selling: the NPC must not turn it around and charge him or hand him goods
             # (unless the player also asks to buy something right now).
-            if selling_context(player_text, history) and not BUY_ASK.search(player_text or ""):
+            if selling and not BUY_ASK.search(player_text or ""):
                 self.last_extras = [e for e in self.last_extras if e[0] not in ("take", "item")]
             # Money leaves the player only for something (goods or a hit), or when he names the sum himself
             # ("тримай 500 на мир"); never for a bare "згода".
@@ -1800,6 +1838,13 @@ class Brain:
         rest = [e for e in extras if e[0] != "buy"]
         asked = offered_amount(player_text, history)  # "продам за 500", or "згода" to the price he named
         total = sum(p for _, p in buys)
+        last = (history or [{}])[-1] if history else {}
+        talk = " ".join([player_text or "", str(last.get("player", "")), str(last.get("npc", ""))])
+        if asked and len(buys) > 1 and PER_ITEM.search(talk):  # "сорок за штуку" + "згода": 40 for each one
+            if any(p < asked for _, p in buys):
+                log(f"buy not done yet: he offers {[p for _, p in buys]}, you asked {asked} each")
+                return rest
+            return rest + [("buy", (name, asked)) for name, _ in buys]
         if not asked or total < asked:
             log(f"buy not done yet: {'no price agreed' if not asked else f'he offers {total}, you asked {asked}'}")
             return rest
