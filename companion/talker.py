@@ -257,7 +257,7 @@ def seconds_range(text, default=(0.5, 3.0)):
 
 
 # Several waiting viewer messages at once, each said by a different NPC nearby; 1 = one after another
-TWITCH_PARALLEL = max(1, int(os.environ.get("TWITCH_PARALLEL", "1") or 1))
+TWITCH_PARALLEL = max(1, int(os.environ.get("TWITCH_PARALLEL", "3") or 3))
 # each of those starts after a random pause from this range (seconds), so the lines overlap naturally
 TWITCH_PARALLEL_DELAY = seconds_range(os.environ.get("TWITCH_PARALLEL_DELAY", "0.5-3"))
 TWITCH_BRAIN_LOCK = threading.Lock()  # "%" retellings written at once: each reads its own gesture back

@@ -112,7 +112,7 @@ A viewer gets linked to a free NPC within `TWITCH_DISTANCE`. If that NPC dies, t
 
 Messages wait in a queue until an NPC is near (at most `TWITCH_QUEUE_MAX`; the oldest are dropped). The Twitch tab shows how many are waiting; **Clear queue** next to it drops them all except the one being said.
 
-When chat is busy, several messages can play at once (`TWITCH_PARALLEL`, default 1 = one after another): each is said by a different NPC nearby, and each starts after a random pause from `TWITCH_PARALLEL_DELAY` (seconds, e.g. `0.5-3`), so the voices overlap naturally. Your own push-to-talk waits until that batch has finished.
+When chat is busy, several messages can play at once (`TWITCH_PARALLEL`, default 3; 1 = one after another): each is said by a different NPC nearby, and each starts after a random pause from `TWITCH_PARALLEL_DELAY` (seconds, e.g. `0.5-3`), so the voices overlap naturally. Your own push-to-talk waits until that batch has finished.
 
 ### Rewards
 
